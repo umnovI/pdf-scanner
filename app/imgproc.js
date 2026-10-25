@@ -210,30 +210,34 @@ function boxBlur(src, w, h, r, horizontal) {
   return out;
 }
 
+// Растяжка контраста. Общие границы для всех каналов — цвет бумаги
+// (жёлтая грамота, голубой бланк) не превращается в белый.
 function autoLevels(d) {
   const n = d.length / 4;
   const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
   for (let i = 0; i < d.length; i += 4) {
     hist[0][d[i]]++; hist[1][d[i + 1]]++; hist[2][d[i + 2]]++;
   }
-  const luts = hist.map(hs => {
-    let lo = 0, hi = 255, acc = 0;
-    while (lo < 255 && (acc += hs[lo]) < n * 0.01) lo++;
+  let lo = 255, hi = 0;
+  for (const hs of hist) {
+    let l = 0, h = 255, acc = 0;
+    while (l < 255 && (acc += hs[l]) < n * 0.01) l++;
     acc = 0;
-    while (hi > 0 && (acc += hs[hi]) < n * 0.005) hi--;
-    if (hi - lo < 48) { lo = 0; hi = 255; }
-    const lut = new Uint8ClampedArray(256);
-    for (let v = 0; v < 256; v++) lut[v] = ((v - lo) * 255) / (hi - lo);
-    return lut;
-  });
+    while (h > 0 && (acc += hs[h]) < n * 0.005) h--;
+    lo = Math.min(lo, l);
+    hi = Math.max(hi, h);
+  }
+  if (hi - lo < 48) return;
+  const lut = new Uint8ClampedArray(256);
+  for (let v = 0; v < 256; v++) lut[v] = ((v - lo) * 255) / (hi - lo);
   for (let i = 0; i < d.length; i += 4) {
-    d[i] = luts[0][d[i]];
-    d[i + 1] = luts[1][d[i + 1]];
-    d[i + 2] = luts[2][d[i + 2]];
+    d[i] = lut[d[i]];
+    d[i + 1] = lut[d[i + 1]];
+    d[i + 2] = lut[d[i + 2]];
   }
 }
 
-export const FILTERS = ['original', 'enhance', 'gray', 'doc', 'bw'];
+export const FILTERS = ['original', 'enhance', 'color', 'gray', 'doc', 'bw'];
 
 // Применяет фильтр к холсту на месте.
 export function applyFilter(canvas, filter) {
@@ -243,6 +247,19 @@ export function applyFilter(canvas, filter) {
   const id = ctx.getImageData(0, 0, w, h);
   const d = id.data;
   if (filter === 'enhance') {
+    autoLevels(d);
+  } else if (filter === 'color') {
+    // Убираем тени и неровный свет, сохраняя цвет бумаги и печатей.
+    const bg = background(canvas);
+    const sample = [];
+    for (let i = 0; i < bg.length; i += 4 * 97) sample.push(bg[i]);
+    sample.sort((x, y) => x - y);
+    const target = Math.max(120, sample[Math.floor(sample.length * 0.97)] || 255);
+    for (let i = 0; i < d.length; i += 4) {
+      let k = target / Math.max(bg[i], 8);
+      if (k < 0.8) k = 0.8; else if (k > 3) k = 3;
+      d[i] *= k; d[i + 1] *= k; d[i + 2] *= k;
+    }
     autoLevels(d);
   } else if (filter === 'gray') {
     for (let i = 0; i < d.length; i += 4) {
@@ -270,22 +287,13 @@ export function applyFilter(canvas, filter) {
 
 // ---------- Поиск краёв документа ----------
 
-// Простой поиск листа на фоне: порог Оцу + самое крупное пятно в центре.
-// Возвращает углы (TL, TR, BR, BL) в долях от размера или null.
-export function detectDocument(canvas) {
-  const small = drawScaled(canvas, 320);
-  const w = small.width, h = small.height;
-  const s = ctx2d(small).getImageData(0, 0, w, h).data;
-  const n = w * h;
-  let g = new Float32Array(n);
-  for (let i = 0; i < n; i++) g[i] = lum(s[i * 4], s[i * 4 + 1], s[i * 4 + 2]);
-  g = boxBlur(boxBlur(g, w, h, 2, true), w, h, 2, false);
-
+function otsu(values) {
   const hist = new Float64Array(256);
-  for (let i = 0; i < n; i++) hist[Math.min(255, g[i] | 0)]++;
+  for (let i = 0; i < values.length; i++) hist[Math.max(0, Math.min(255, values[i] | 0))]++;
+  const n = values.length;
   let sum = 0;
   for (let t = 0; t < 256; t++) sum += t * hist[t];
-  let sumB = 0, wB = 0, best = 0, thr = 128;
+  let sumB = 0, wB = 0, best = -1, thr = 128;
   for (let t = 0; t < 256; t++) {
     wB += hist[t];
     if (!wB) continue;
@@ -296,18 +304,16 @@ export function detectDocument(canvas) {
     const between = wB * wF * (mB - mF) * (mB - mF);
     if (between > best) { best = between; thr = t; }
   }
+  return thr;
+}
 
-  // Лист обычно светлее фона; если в центре тёмное — инвертируем.
-  const center = g[(h >> 1) * w + (w >> 1)];
-  const light = center > thr;
-  const mask = new Uint8Array(n);
-  for (let i = 0; i < n; i++) mask[i] = (g[i] > thr) === light ? 1 : 0;
-
-  // Самое большое связное пятно (предпочтение — то, что в центре).
+// Из маски «лист / не лист» берёт самое крупное пятно (с приоритетом центра)
+// и находит его 4 угла. Возвращает { quad, score } или null.
+function quadFromMask(mask, w, h) {
+  const n = w * h;
   const label = new Int32Array(n).fill(-1);
   const stack = new Int32Array(n);
-  let bestLabel = -1, bestScore = 0, cur = 0;
-  const comps = [];
+  let bestLabel = -1, bestScore = 0, bestCount = 0, cur = 0;
   for (let start = 0; start < n; start++) {
     if (!mask[start] || label[start] !== -1) continue;
     let sp = 0, count = 0, touchesCenter = false;
@@ -324,15 +330,12 @@ export function detectDocument(canvas) {
       if (y < h - 1 && mask[p + w] && label[p + w] === -1) { label[p + w] = cur; stack[sp++] = p + w; }
     }
     const score = count * (touchesCenter ? 2 : 1);
-    comps.push(count);
-    if (score > bestScore) { bestScore = score; bestLabel = cur; }
+    if (score > bestScore) { bestScore = score; bestLabel = cur; bestCount = count; }
     cur++;
   }
-  if (bestLabel < 0) return null;
-  const area = comps[bestLabel];
-  if (area < n * 0.08 || area > n * 0.97) return null;
+  if (bestLabel < 0 || bestCount < n * 0.08 || bestCount > n * 0.97) return null;
 
-  let tl = null, tr = null, br = null, bl = null;
+  let tl, tr, br, bl;
   let mTL = Infinity, mTR = -Infinity, mBR = -Infinity, mBL = Infinity;
   for (let p = 0; p < n; p++) {
     if (label[p] !== bestLabel) continue;
@@ -344,10 +347,82 @@ export function detectDocument(canvas) {
     if (s2 < mBL) { mBL = s2; bl = [x, y]; }
   }
   const quad = [tl, tr, br, bl].map(([x, y]) => [(x + 0.5) / w, (y + 0.5) / h]);
-  // Отбрасываем вырожденные рамки.
-  const ar = polygonArea(quad);
-  if (ar < 0.08) return null;
-  return quad;
+  const qa = polygonArea(quad);
+  if (qa < 0.08) return null;
+  // Насколько пятно похоже на четырёхугольник: у листа близко к 1.
+  return { quad, score: Math.min(bestCount / n, qa) / Math.max(bestCount / n, qa) };
+}
+
+// Ищет лист на фоне двумя способами — по яркости и по отличию цвета от фона
+// (для жёлтых грамот, цветных бланков и т.п.) — и берёт лучший результат.
+// Возвращает углы (TL, TR, BR, BL) в долях от размера или null.
+export function detectDocument(canvas) {
+  const small = drawScaled(canvas, 320);
+  const w = small.width, h = small.height;
+  const s = ctx2d(small).getImageData(0, 0, w, h).data;
+  const n = w * h;
+  const ch = [0, 1, 2].map(c => {
+    let a = new Float32Array(n);
+    for (let i = 0; i < n; i++) a[i] = s[i * 4 + c];
+    return boxBlur(boxBlur(a, w, h, 2, true), w, h, 2, false);
+  });
+  const L = new Float32Array(n);
+  for (let i = 0; i < n; i++) L[i] = lum(ch[0][i], ch[1][i], ch[2][i]);
+
+  const found = [];
+
+  // 1) По яркости: лист обычно светлее фона; если в центре тёмное — наоборот.
+  const tl = otsu(L);
+  const light = L[(h >> 1) * w + (w >> 1)] > tl;
+  const m1 = new Uint8Array(n);
+  for (let i = 0; i < n; i++) m1[i] = (L[i] > tl) === light ? 1 : 0;
+  found.push(quadFromMask(m1, w, h));
+
+  // 2) По цвету: чем пиксель отличается от цвета фона по краям кадра.
+  const band = Math.max(2, Math.round(Math.min(w, h) * 0.04));
+  const border = [[], [], []];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (x >= band && x < w - band && y >= band && y < h - band) continue;
+      const i = y * w + x;
+      for (let c = 0; c < 3; c++) border[c].push(ch[c][i]);
+    }
+  }
+  const bgc = border.map(a => { a.sort((x, y) => x - y); return a[a.length >> 1]; });
+  const D = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const dr = ch[0][i] - bgc[0], dg = ch[1][i] - bgc[1], db = ch[2][i] - bgc[2];
+    D[i] = Math.min(255, Math.sqrt(dr * dr + dg * dg + db * db));
+  }
+  const td = otsu(D);
+  if (td > 12) {
+    const m2 = new Uint8Array(n);
+    for (let i = 0; i < n; i++) m2[i] = D[i] > td ? 1 : 0;
+    found.push(quadFromMask(m2, w, h));
+  }
+
+  // 3) По оттенку (без учёта яркости) — тени почти не мешают.
+  const chroma = i => {
+    const sum = ch[0][i] + ch[1][i] + ch[2][i] + 1;
+    return [ch[0][i] / sum, ch[1][i] / sum];
+  };
+  const bsum = bgc[0] + bgc[1] + bgc[2] + 1;
+  const bch = [bgc[0] / bsum, bgc[1] / bsum];
+  const C = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    if (ch[0][i] + ch[1][i] + ch[2][i] < 45) continue; // слишком тёмное — оттенок ненадёжен
+    const [cr, cg] = chroma(i);
+    C[i] = Math.min(255, Math.hypot(cr - bch[0], cg - bch[1]) * 1500);
+  }
+  const tc = otsu(C);
+  if (tc > 12) {
+    const m3 = new Uint8Array(n);
+    for (let i = 0; i < n; i++) m3[i] = C[i] > tc ? 1 : 0;
+    found.push(quadFromMask(m3, w, h));
+  }
+
+  const best = found.filter(Boolean).sort((a, b) => b.score - a.score)[0];
+  return best && best.score > 0.8 ? best.quad : null;
 }
 
 function polygonArea(q) {

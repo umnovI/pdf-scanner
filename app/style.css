@@ -380,5 +380,3 @@ main {
   font-weight: 700;
 }
 .version { margin: 4px 0 0; text-align: center; font-size: 12px; color: var(--muted); }
-/* Пока открыт редактор, плашка не закрывает его кнопки — покажется после. */
-#editor:not([hidden]) ~ #update { display: none; }

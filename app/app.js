@@ -14,6 +14,9 @@ const QUALITY = {
 const state = {
   pages: [],          // { id, order, src, rotation, corners, filter, out, thumb, thumbUrl }
   persist: true,
+  writes: 0,          // незавершённые записи в IndexedDB
+  unsaved: false,     // какая-то запись не удалась — после перезагрузки данные пропадут
+  updateReady: false, // загружена новая версия приложения
   pdf: null,          // готовый PDF { blob, name }
 };
 
@@ -42,6 +45,7 @@ function toast(text, ms = 2600) {
 function busy(text) {
   $('busy-text').textContent = text || 'Обработка…';
   $('busy').hidden = !text;
+  refreshUpdateBanner();
 }
 
 // Даём браузеру отрисовать индикатор перед тяжёлой работой.
@@ -54,9 +58,21 @@ function record(p) {
   return { id, order, src, rotation, corners, filter, out, thumb };
 }
 
+// Отслеживает запись в IndexedDB: перезагрузка для обновления её дождётся.
+async function track(promise) {
+  state.writes++;
+  try {
+    await promise;
+  } catch (e) {
+    console.warn(e);
+    state.unsaved = true;
+  } finally {
+    state.writes--;
+  }
+}
+
 async function persist(p) {
-  if (!state.persist) return;
-  try { await db.save(record(p)); } catch (e) { console.warn(e); }
+  if (state.persist) await track(db.save(record(p)));
 }
 
 function setThumb(p) {
@@ -99,7 +115,7 @@ async function move(i, dir) {
   if (j < 0 || j >= state.pages.length) return;
   [state.pages[i], state.pages[j]] = [state.pages[j], state.pages[i]];
   renderList();
-  if (state.persist) db.saveOrder(state.pages.map(record)).catch(console.warn);
+  if (state.persist) track(db.saveOrder(state.pages.map(record)));
 }
 
 async function removePage(p) {
@@ -107,7 +123,7 @@ async function removePage(p) {
   state.pages = state.pages.filter(x => x !== p);
   if (p.thumbUrl) URL.revokeObjectURL(p.thumbUrl);
   renderList();
-  if (state.persist) db.remove(p.id).catch(console.warn);
+  if (state.persist) track(db.remove(p.id));
   return true;
 }
 
@@ -228,6 +244,7 @@ async function openEditor(p, { isNew = false } = {}) {
   $('ed-title').textContent = `Страница ${state.pages.indexOf(p) + 1}`;
   $('ed-more').hidden = !isNew;
   $('editor').hidden = false;
+  refreshUpdateBanner();
   busy(null);
   rebuildBase();
   syncChips();
@@ -235,6 +252,7 @@ async function openEditor(p, { isNew = false } = {}) {
 
 function closeEditor() {
   $('editor').hidden = true;
+  refreshUpdateBanner();
   ed.page = ed.source = ed.base = ed.preview = null;
 }
 
@@ -482,6 +500,7 @@ function openSheet() {
   $('pdf-quality').value = settings.get('quality', 'high');
   resetSheetResult();
   $('sheet').hidden = false;
+  refreshUpdateBanner();
 }
 
 function resetSheetResult() {
@@ -570,32 +589,49 @@ function downloadPdf() {
 
 // Установленное приложение почти не перезагружается, поэтому новую версию
 // проверяем при запуске, при возврате из фона и раз в час (пока приложение на
-// экране). Когда загружена версия, отличная от текущей, показываем плашку «Обновить».
+// экране, не чаще раза в 5 минут). Когда загружена версия, отличная от текущей,
+// показываем плашку «Обновить».
 function setupUpdates() {
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
   const sw = navigator.serviceWorker;
+  const askVersion = () => sw.controller?.postMessage({ type: 'version' });
+  sw.addEventListener('message', e => {
+    if (e.data?.type === 'version' && e.data.version !== BUILD) {
+      state.updateReady = true;
+      refreshUpdateBanner();
+    }
+  });
+  // Сменился управляющий воркер — спрашиваем его версию. При первой установке
+  // она совпадает с версией страницы, и плашка не нужна.
+  sw.addEventListener('controllerchange', askVersion);
+  askVersion(); // на случай, если смена произошла до загрузки этого скрипта
+
+  let lastCheck = Date.now();
   sw.register('sw.js', { updateViaCache: 'none' }).then(reg => {
-    const check = () => { if (!document.hidden) reg.update().catch(() => {}); };
+    const check = () => {
+      if (document.hidden || Date.now() - lastCheck < 5 * 60 * 1000) return;
+      lastCheck = Date.now();
+      reg.update().catch(() => {});
+    };
     document.addEventListener('visibilitychange', check);
     setInterval(check, 60 * 60 * 1000);
   }).catch(console.warn);
-  // Сменился управляющий воркер — спрашиваем его версию. При первой установке
-  // она совпадает с версией страницы, и плашка не нужна.
-  sw.addEventListener('controllerchange', () => {
-    sw.controller?.postMessage({ type: 'version' });
-  });
-  sw.addEventListener('message', e => {
-    if (e.data?.type === 'version' && e.data.version !== BUILD) $('update').hidden = false;
-  });
-  $('update-btn').onclick = () => {
-    // Не перезагружаемся посреди работы: страница может быть ещё не сохранена.
-    if (!$('busy').hidden) { toast('Дождитесь окончания обработки'); return; }
-    if (!$('editor').hidden) { toast('Сначала закройте редактор страницы'); return; }
-    if (!state.persist && state.pages.length &&
-        !confirm('Браузер не даёт сохранять страницы — после обновления они пропадут. Обновить?')) return;
+
+  $('update-btn').onclick = async () => {
+    // Дожидаемся записи страниц в память браузера, иначе они пропадут.
+    while (state.writes > 0) await new Promise(r => setTimeout(r, 100));
+    if ((!state.persist || state.unsaved) && state.pages.length &&
+        !confirm('Часть страниц не сохранилась в браузере и пропадёт после обновления. Обновить?')) return;
     location.reload();
   };
+}
+
+// Плашка не показывается поверх редактора, окна PDF и обработки — там можно
+// потерять несохранённую работу. Появится, когда они закроются.
+function refreshUpdateBanner() {
+  $('update').hidden = !state.updateReady ||
+    !$('editor').hidden || !$('sheet').hidden || !$('busy').hidden;
 }
 
 // ---------- Запуск ----------
@@ -629,13 +665,13 @@ function setup() {
     state.pages.forEach(p => p.thumbUrl && URL.revokeObjectURL(p.thumbUrl));
     state.pages = [];
     renderList();
-    if (state.persist) db.clear().catch(console.warn);
+    if (state.persist) track(db.clear());
   };
 
   $('pdf-make').onclick = makePdf;
   $('pdf-share').onclick = sharePdf;
   $('pdf-download').onclick = downloadPdf;
-  $('pdf-close').onclick = () => { $('sheet').hidden = true; state.pdf = null; };
+  $('pdf-close').onclick = () => { $('sheet').hidden = true; state.pdf = null; refreshUpdateBanner(); };
   $('sheet').addEventListener('click', e => { if (e.target === $('sheet')) $('pdf-close').click(); });
   ['pdf-size', 'pdf-fit', 'pdf-margin', 'pdf-quality', 'pdf-name'].forEach(id => {
     $(id).addEventListener('input', () => { if (state.pdf) resetSheetResult(); });

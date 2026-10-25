@@ -15,19 +15,42 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Иконки (SVG): линейные, цвет — от текста (currentColor). Использование:
+       <svg class="icon"><use href="#i-имя"/></svg> -->
+  <svg xmlns="http://www.w3.org/2000/svg" class="icon-sprite" aria-hidden="true">
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-9 9"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11A8 8 0 0 0 5.1 7.1L4 9M4 4v5h5M4 13a8 8 0 0 0 14.9 3.9L20 15M20 20v-5h-5"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r="1.1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-rotate-left" viewBox="0 0 24 24"><path d="M3 4v5h5"/><path d="M3.6 9A9 9 0 1 1 6 18.4"/></symbol>
+    <symbol id="i-rotate-right" viewBox="0 0 24 24"><path d="M21 4v5h-5"/><path d="M20.4 9A9 9 0 1 0 18 18.4"/></symbol>
+    <symbol id="i-scan" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8.5 8l7 .8-.8 7-7-.8z"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  </svg>
+
   <header class="topbar">
     <button id="btn-projects" class="project-btn" aria-label="Проекты">
-      <span aria-hidden="true">📁</span>
+      <svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg>
       <span id="project-name" class="project-name">Сканер PDF</span>
-      <span aria-hidden="true" class="caret">▾</span>
+      <svg class="icon caret" aria-hidden="true"><use href="#i-chevron-down"/></svg>
     </button>
-    <button id="btn-menu" class="menu-btn" aria-label="Меню" aria-haspopup="menu" aria-expanded="false">⋮</button>
+    <button id="btn-menu" class="menu-btn" aria-label="Меню" aria-haspopup="menu" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-more"/></svg></button>
     <div id="menu" class="menu" role="menu" hidden>
-      <button role="menuitem" data-act="projects">📁 Проекты</button>
-      <button role="menuitem" data-act="new">＋ Новый проект</button>
-      <button role="menuitem" data-act="clear" id="btn-clear" class="danger">🗑 Очистить проект</button>
-      <button role="menuitem" data-act="update">⟳ Проверить обновления</button>
-      <button role="menuitem" data-act="about">ℹ О приложении</button>
+      <button role="menuitem" data-act="projects"><svg class="icon" aria-hidden="true"><use href="#i-folder"/></svg> Проекты</button>
+      <button role="menuitem" data-act="new"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> Новый проект</button>
+      <button role="menuitem" data-act="clear" id="btn-clear" class="danger"><svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg> Очистить проект</button>
+      <button role="menuitem" data-act="update"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg> Проверить обновления</button>
+      <button role="menuitem" data-act="about"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg> О приложении</button>
     </div>
   </header>
   <!-- Плашка обновления — в потоке страницы под шапкой: ничего не перекрывает,
@@ -39,7 +62,7 @@
 
   <main id="main">
     <section id="empty" class="empty">
-      <div class="empty-icon" aria-hidden="true">📄</div>
+      <div class="empty-icon"><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg></div>
       <h2>Нет страниц</h2>
       <p>Сфотографируйте документ или выберите фото из галереи. Потом обрежьте, выровняйте и сохраните всё в один PDF.</p>
     </section>
@@ -47,9 +70,9 @@
   </main>
 
   <nav class="bottombar">
-    <button id="btn-camera" class="action primary"><span aria-hidden="true">📷</span> Камера</button>
-    <button id="btn-gallery" class="action"><span aria-hidden="true">🖼️</span> Галерея</button>
-    <button id="btn-pdf" class="action accent" disabled><span aria-hidden="true">📄</span> PDF</button>
+    <button id="btn-camera" class="action primary"><svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg> Камера</button>
+    <button id="btn-gallery" class="action"><svg class="icon" aria-hidden="true"><use href="#i-image"/></svg> Галерея</button>
+    <button id="btn-pdf" class="action accent" disabled><svg class="icon" aria-hidden="true"><use href="#i-file"/></svg> PDF</button>
   </nav>
 
   <input id="in-camera" type="file" accept="image/*" capture="environment" hidden>
@@ -79,14 +102,14 @@
         <button class="chip" data-f="doc">Документ</button>
         <button class="chip" data-f="bw">Ч/Б</button>
       </div>
-      <button id="ed-more" class="more-btn" hidden>📷 Готово и снять ещё страницу</button>
+      <button id="ed-more" class="more-btn" hidden><svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg> Готово и снять ещё страницу</button>
       <div class="tools">
-        <button id="ed-retake" class="tool" title="Сделать фото заново">📷<small>Переснять</small></button>
-        <button id="ed-rotl" class="tool" title="Повернуть влево">⟲<small>Влево</small></button>
-        <button id="ed-rotr" class="tool" title="Повернуть вправо">⟳<small>Вправо</small></button>
-        <button id="ed-auto" class="tool" title="Найти края документа">⌗<small>Края</small></button>
-        <button id="ed-full" class="tool" title="Сбросить рамку на весь кадр">⛶<small>Сброс</small></button>
-        <button id="ed-delete" class="tool danger" title="Удалить страницу">🗑<small>Удалить</small></button>
+        <button id="ed-retake" class="tool" title="Сделать фото заново"><svg class="icon" aria-hidden="true"><use href="#i-camera"/></svg><small>Переснять</small></button>
+        <button id="ed-rotl" class="tool" title="Повернуть влево"><svg class="icon" aria-hidden="true"><use href="#i-rotate-left"/></svg><small>Влево</small></button>
+        <button id="ed-rotr" class="tool" title="Повернуть вправо"><svg class="icon" aria-hidden="true"><use href="#i-rotate-right"/></svg><small>Вправо</small></button>
+        <button id="ed-auto" class="tool" title="Найти края документа"><svg class="icon" aria-hidden="true"><use href="#i-scan"/></svg><small>Края</small></button>
+        <button id="ed-full" class="tool" title="Сбросить рамку на весь кадр"><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg><small>Сброс</small></button>
+        <button id="ed-delete" class="tool danger" title="Удалить страницу"><svg class="icon" aria-hidden="true"><use href="#i-trash"/></svg><small>Удалить</small></button>
       </div>
     </div>
   </div>
@@ -145,7 +168,7 @@
   <div id="projects" class="sheet-backdrop" hidden>
     <div class="sheet" role="dialog" aria-labelledby="projects-title">
       <h2 id="projects-title">Проекты</h2>
-      <button id="project-new" class="action primary wide">＋ Новый проект</button>
+      <button id="project-new" class="action primary wide"><svg class="icon" aria-hidden="true"><use href="#i-plus"/></svg> Новый проект</button>
       <p class="hint">Новый проект начинается пустым, прошлые остаются здесь — их можно открыть и продолжить. Фото не копируются.</p>
       <ul id="project-list" class="project-list"></ul>
       <div class="sheet-actions">
@@ -167,8 +190,8 @@
       </dl>
       <p class="hint">Фото и PDF обрабатываются и хранятся только на этом телефоне, в интернет не отправляются.</p>
       <div class="sheet-actions">
-        <button id="about-reload" class="action accent wide" hidden>Обновить сейчас</button>
-        <button id="about-check" class="action wide">⟳ Проверить обновления</button>
+        <button id="about-reload" class="action accent wide" hidden><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg> Обновить сейчас</button>
+        <button id="about-check" class="action wide"><svg class="icon" aria-hidden="true"><use href="#i-refresh"/></svg> Проверить обновления</button>
         <a class="text-btn link" href="https://github.com/umnovI/pdf-scanner" target="_blank" rel="noopener">Исходный код на GitHub</a>
         <button id="about-close" class="text-btn">Закрыть</button>
       </div>

@@ -14,6 +14,7 @@ function open() {
   if (!dbPromise) {
     dbPromise = new Promise((resolve, reject) => {
       if (!('indexedDB' in self)) { reject(new Error('IndexedDB недоступна')); return; }
+      let blocked = false;
       const req = indexedDB.open(DB_NAME, 2);
       req.onupgradeneeded = () => {
         const db = req.result;
@@ -22,13 +23,25 @@ function open() {
       };
       req.onsuccess = () => {
         const db = req.result;
-        // Новая версия приложения в другой вкладке обновляет базу — отпускаем её.
-        db.onversionchange = () => db.close();
+        // Открылась уже после отказа (старая вкладка закрылась) — эта вкладка
+        // работает без сохранения, соединение не нужно.
+        if (blocked) { db.close(); return; }
+        // Новая версия приложения в другой вкладке обновляет базу — отпускаем её
+        // и сообщаем приложению: дальше сохранять нельзя, нужна перезагрузка.
+        db.onversionchange = () => {
+          db.close();
+          dbPromise = Promise.reject(Object.assign(new Error('База обновлена другой вкладкой'), { closed: true }));
+          dbPromise.catch(() => {});
+          self.dispatchEvent(new Event('pdf-scanner-db-closed'));
+        };
         resolve(db);
       };
       req.onerror = () => reject(req.error);
       // Базу держит открытой старая версия в другой вкладке — не ждём бесконечно.
-      req.onblocked = () => reject(Object.assign(new Error('База занята другой вкладкой'), { blocked: true }));
+      req.onblocked = () => {
+        blocked = true;
+        reject(Object.assign(new Error('База занята другой вкладкой'), { blocked: true }));
+      };
     });
   }
   return dbPromise;
@@ -39,18 +52,24 @@ async function tx(mode, fn) {
   const db = await open();
   return new Promise((resolve, reject) => {
     const t = db.transaction([PAGES, META], mode);
-    fn(t.objectStore(PAGES), t.objectStore(META));
     t.oncomplete = () => resolve();
     t.onerror = () => reject(t.error);
     t.onabort = () => reject(t.error);
+    try {
+      fn(t.objectStore(PAGES), t.objectStore(META));
+    } catch (e) {
+      t.abort(); // не оставляем половину записи
+      reject(e);
+    }
   });
 }
 
 const putOrder = (meta, ids) => meta.put({ key: 'order', ids });
 
 // Страницы в сохранённом порядке. Читаем без записи, а перенос данных старой
-// версии и чистку лишних записей делаем отдельно — их сбой не мешает загрузке.
-export async function loadAll() {
+// версии и чистку лишних записей делаем отдельной записью — её сбой не мешает
+// загрузке. Эту запись передаём в onWrite, чтобы её можно было дождаться.
+export async function loadAll(onWrite = () => {}) {
   let list = [], ids;
   await tx('readonly', (pages, meta) => {
     const all = pages.getAll();
@@ -58,19 +77,20 @@ export async function loadAll() {
     all.onsuccess = () => { list = all.result || []; };
     order.onsuccess = () => { ids = order.result?.ids; };
   });
-  const fixes = [];
-  if (!ids) {
+  const migrate = !ids;
+  if (migrate) {
     // Данные старой версии: порядок был в поле order каждой страницы.
     list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     ids = list.map(p => p.id);
-    fixes.push(meta => putOrder(meta, ids));
   }
   const keep = new Set(ids);
   // Страница, которой нет в списке, осталась от неудавшегося удаления.
   const orphans = list.filter(p => !keep.has(p.id)).map(p => p.id);
-  if (orphans.length) fixes.push((meta, pages) => orphans.forEach(id => pages.delete(id)));
-  if (fixes.length) {
-    tx('readwrite', (pages, meta) => fixes.forEach(f => f(meta, pages))).catch(console.warn);
+  if (migrate || orphans.length) {
+    onWrite(tx('readwrite', (pages, meta) => {
+      if (migrate) putOrder(meta, ids);
+      orphans.forEach(id => pages.delete(id));
+    }));
   }
   const byId = new Map(list.map(p => [p.id, p]));
   return ids.map(id => byId.get(id)).filter(Boolean);

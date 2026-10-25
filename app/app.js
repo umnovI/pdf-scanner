@@ -79,7 +79,12 @@ async function persist(p) {
   writeSeq.set(p.id, seq);
   const ok = await track(db.save(record(p), pageIds()));
   if (writeSeq.get(p.id) !== seq) return;
-  if (ok) state.unsaved.delete(p.id); else state.unsaved.add(p.id);
+  if (ok) {
+    state.unsaved.delete(p.id);
+    state.dbFailed = false; // вместе со страницей записан и весь текущий порядок
+  } else {
+    state.unsaved.add(p.id);
+  }
 }
 
 // Запись порядка страниц (перемещение, удаление). Удачная запись заменяет
@@ -613,6 +618,12 @@ function setupUpdates() {
     if (e.data?.type === 'pdf-scanner-version') $('update').hidden = e.data.version === BUILD;
   });
   sw.startMessages(); // включаем доставку явно: addEventListener сам её не включает
+  // Другая вкладка обновила приложение и формат базы — здесь сохранять уже нельзя.
+  // (Дальнейшие записи будут неудачными и попадут в учёт несохранённых.)
+  self.addEventListener('pdf-scanner-db-closed', () => {
+    $('update').hidden = false;
+    toast('Приложение обновилось в другой вкладке — нажмите «Обновить»', 6000);
+  });
   // Вкладка вернулась из кэша браузера и могла пропустить рассылку — спрашиваем сами.
   window.addEventListener('pageshow', e => {
     if (e.persisted) sw.controller?.postMessage({ type: 'pdf-scanner-version' });
@@ -657,7 +668,7 @@ function setupUpdates() {
 
 async function restore() {
   try {
-    const saved = await db.loadAll();
+    const saved = await db.loadAll(track);
     state.pages = saved.filter(p => p.src && p.out && p.thumb);
     state.pages.forEach(setThumb);
   } catch (e) {

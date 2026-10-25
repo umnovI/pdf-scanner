@@ -308,6 +308,34 @@ export async function openApp(browser, server, { device, url, init = [], allowEr
   return p;
 }
 
+/**
+ * Ждёт, пока завершатся начатые приложением записи в IndexedDB: своя транзакция
+ * на запись по всем хранилищам выполняется только после них. Без этого
+ * перезагрузка сразу после нажатия обрывает запись (на медленной машине CI —
+ * регулярно), и тест видит старое состояние.
+ */
+export const settleDb = page => page.evaluate(async () => {
+  const names = (await indexedDB.databases?.() || []).map(d => d.name);
+  if (!names.includes('pdf-scanner')) return; // базы ещё нет — не создаём пустую
+  await new Promise((resolve, reject) => {
+    const req = indexedDB.open('pdf-scanner');
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.length) { db.close(); resolve(); return; }
+      const t = db.transaction([...db.objectStoreNames], 'readwrite');
+      t.oncomplete = () => { db.close(); resolve(); };
+      t.onerror = t.onabort = () => { db.close(); reject(t.error); };
+    };
+  });
+});
+
+/** Перезагрузка вкладки после того, как записи приложения дошли до базы. */
+export async function reload(page) {
+  await settleDb(page);
+  await page.reload();
+}
+
 /** Страницы так, как они записаны в IndexedDB, в порядке списка. */
 export const dbRecords = page => page.evaluate(async () => {
   const pages = (await window.raw.all('pages')) || [];

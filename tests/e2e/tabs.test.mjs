@@ -53,7 +53,7 @@ describe('две вкладки', () => {
     const errors = [];
     fresh.on('pageerror', e => errors.push(e.message));
     await fresh.goto(server.url);
-    await fresh.waitForFunction(() => /Закройте другие вкладки/.test(document.getElementById('toast').textContent) && !document.getElementById('toast').hidden);
+    await fresh.waitForFunction(() => /Закройте другие вкладки/.test(document.getElementById('toast')?.textContent) && !document.getElementById('toast').hidden);
     // приложение остаётся рабочим: страницы добавляются, хотя и не сохраняются
     await addFromGallery(fresh, ['white.jpg']);
     assert.equal(await pageCount(fresh), 1);
@@ -153,7 +153,7 @@ describe('сбой записи IndexedDB', () => {
       assert.equal((await dbRecords(page)).length, 3, 'третья страница теперь в базе');
       const dialogs = collectDialogs(page);
       await Promise.all([page.waitForEvent('load'), page.click('#update-btn')]);
-      await page.waitForFunction(() => document.getElementById('version').textContent === 'Версия: bbb2222');
+      await page.waitForFunction(() => document.getElementById('version')?.textContent === 'Версия: bbb2222');
       await waitPages(page, 3);
       assert.deepEqual(dialogs, [], 'второго вопроса быть не должно');
       assert.deepEqual(errors, [], 'сбой записи обработан приложением, а не выброшен как необработанная ошибка');
@@ -207,7 +207,7 @@ describe('сбой записи IndexedDB', () => {
     const dialogs = collectDialogs(page);
     await release(srv, page);
     await page.click('#update-btn');
-    await page.waitForFunction(() => document.getElementById('version').textContent === 'Версия: bbb2222');
+    await page.waitForFunction(() => document.getElementById('version')?.textContent === 'Версия: bbb2222');
     await waitPages(page, 2);
     assert.deepEqual(dialogs, []);
   }));

@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f6feb">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Сканер PDF">
+  <meta name="description" content="Сканирование фотографий и документов в PDF прямо на телефоне">
+  <title>Сканер PDF</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Сканер PDF</h1>
+    <button id="btn-clear" class="icon-btn" title="Удалить все страницы" hidden>Очистить</button>
+  </header>
+
+  <main id="main">
+    <section id="empty" class="empty">
+      <div class="empty-icon" aria-hidden="true">📄</div>
+      <h2>Нет страниц</h2>
+      <p>Сфотографируйте документ или выберите фото из галереи. Потом обрежьте, выровняйте и сохраните всё в один PDF.</p>
+    </section>
+    <ol id="pages" class="pages"></ol>
+  </main>
+
+  <nav class="bottombar">
+    <button id="btn-camera" class="action primary"><span aria-hidden="true">📷</span> Камера</button>
+    <button id="btn-gallery" class="action"><span aria-hidden="true">🖼️</span> Галерея</button>
+    <button id="btn-pdf" class="action accent" disabled><span aria-hidden="true">📄</span> PDF</button>
+  </nav>
+
+  <input id="in-camera" type="file" accept="image/*" capture="environment" hidden>
+  <input id="in-gallery" type="file" accept="image/*" multiple hidden>
+
+  <!-- Редактор страницы -->
+  <div id="editor" class="editor" hidden>
+    <div class="editor-top">
+      <button id="ed-cancel" class="text-btn">Отмена</button>
+      <span id="ed-title">Страница</span>
+      <button id="ed-done" class="text-btn strong">Готово</button>
+    </div>
+    <div id="ed-stage" class="ed-stage">
+      <canvas id="ed-canvas"></canvas>
+      <div class="handle" data-i="0"></div>
+      <div class="handle" data-i="1"></div>
+      <div class="handle" data-i="2"></div>
+      <div class="handle" data-i="3"></div>
+      <canvas id="ed-loupe" class="loupe" width="240" height="240" hidden></canvas>
+    </div>
+    <div class="editor-bottom">
+      <div id="ed-filters" class="chips" role="radiogroup" aria-label="Фильтр">
+        <button class="chip" data-f="original">Оригинал</button>
+        <button class="chip" data-f="enhance">Улучшить</button>
+        <button class="chip" data-f="color">Цветной лист</button>
+        <button class="chip" data-f="gray">Серый</button>
+        <button class="chip" data-f="doc">Документ</button>
+        <button class="chip" data-f="bw">Ч/Б</button>
+      </div>
+      <button id="ed-more" class="more-btn" hidden>📷 Готово и снять ещё страницу</button>
+      <div class="tools">
+        <button id="ed-rotl" class="tool" title="Повернуть влево">⟲<small>Влево</small></button>
+        <button id="ed-rotr" class="tool" title="Повернуть вправо">⟳<small>Вправо</small></button>
+        <button id="ed-auto" class="tool" title="Найти края документа">⌗<small>Края</small></button>
+        <button id="ed-full" class="tool" title="Весь кадр">⛶<small>Весь кадр</small></button>
+        <button id="ed-delete" class="tool danger" title="Удалить страницу">🗑<small>Удалить</small></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Окно создания PDF -->
+  <div id="sheet" class="sheet-backdrop" hidden>
+    <div class="sheet" role="dialog" aria-labelledby="sheet-title">
+      <h2 id="sheet-title">Сохранить PDF</h2>
+      <label class="field">
+        <span>Имя файла</span>
+        <input id="pdf-name" type="text" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>Размер страницы</span>
+        <select id="pdf-size">
+          <option value="a4">A4</option>
+          <option value="letter">Letter</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Фото на странице</span>
+        <select id="pdf-fit">
+          <option value="fill">Растянуть на всю страницу</option>
+          <option value="fit">Вписать целиком (без искажений)</option>
+        </select>
+      </label>
+      <p class="hint">Все страницы PDF будут одного размера.</p>
+      <label class="field">
+        <span>Поля</span>
+        <select id="pdf-margin">
+          <option value="0">Без полей</option>
+          <option value="18">Узкие</option>
+          <option value="36">Обычные</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Качество</span>
+        <select id="pdf-quality">
+          <option value="high">Высокое</option>
+          <option value="medium">Среднее (меньше файл)</option>
+          <option value="low">Сжатое (для почты)</option>
+        </select>
+      </label>
+      <p id="pdf-result" class="result" hidden></p>
+      <div class="sheet-actions">
+        <button id="pdf-make" class="action accent wide">Создать PDF</button>
+        <button id="pdf-share" class="action accent wide" hidden>Поделиться</button>
+        <button id="pdf-download" class="action wide" hidden>Скачать</button>
+        <button id="pdf-close" class="text-btn">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="busy" class="busy" hidden>
+    <div class="spinner"></div>
+    <p id="busy-text">Обработка…</p>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

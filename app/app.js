@@ -3,6 +3,8 @@ import { buildPdf } from './pdf.js';
 import * as db from './db.js';
 
 const $ = id => document.getElementById(id);
+// SVG-иконка из набора в index.html.
+const icon = name => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const BUILD = '__BUILD__'; // при публикации заменяется на номер коммита
 const OUT_QUALITY = 0.9;
 const QUALITY = {
@@ -131,9 +133,9 @@ function renderList() {
       <button class="thumb" aria-label="Изменить страницу ${i + 1}"><img alt=""></button>
       <span class="num">${i + 1}</span>
       <div class="row">
-        <button class="left" aria-label="Переместить влево" ${i === 0 ? 'disabled' : ''}>◀</button>
-        <button class="del" aria-label="Удалить">✕</button>
-        <button class="right" aria-label="Переместить вправо" ${i === n - 1 ? 'disabled' : ''}>▶</button>
+        <button class="left" aria-label="Переместить влево" ${i === 0 ? 'disabled' : ''}>${icon('chevron-left')}</button>
+        <button class="del" aria-label="Удалить">${icon('x')}</button>
+        <button class="right" aria-label="Переместить вправо" ${i === n - 1 ? 'disabled' : ''}>${icon('chevron-right')}</button>
       </div>`;
     li.querySelector('img').src = p.thumbUrl;
     li.querySelector('.thumb').onclick = () => openEditor(p);
@@ -145,7 +147,7 @@ function renderList() {
   $('empty').hidden = n > 0;
   $('btn-clear').disabled = n === 0;
   $('btn-pdf').disabled = n === 0;
-  $('btn-pdf').innerHTML = `<span aria-hidden="true">📄</span> PDF${n ? ` (${n})` : ''}`;
+  $('btn-pdf').innerHTML = `${icon('file')} PDF${n ? ` (${n})` : ''}`;
 }
 
 async function move(i, dir) {
@@ -750,14 +752,14 @@ async function renderProjects() {
     li.className = 'project' + (p === state.project ? ' current' : '');
     li.innerHTML = `
       <button class="project-open">
-        <span class="project-thumb"><img alt="" hidden></span>
+        <span class="project-thumb">${icon('file')}<img alt="" hidden></span>
         <span class="project-info">
           <span class="project-title"></span>
           <span class="project-meta"></span>
         </span>
       </button>
-      <button class="project-rename" aria-label="Переименовать">✎</button>
-      <button class="project-delete" aria-label="Удалить проект">🗑</button>`;
+      <button class="project-rename" aria-label="Переименовать">${icon('pencil')}</button>
+      <button class="project-delete" aria-label="Удалить проект">${icon('trash')}</button>`;
     li.querySelector('.project-title').textContent = p.name;
     li.querySelector('.project-meta').textContent =
       `${ids.length} стр. · ${formatDate(p.created)}${p === state.project ? ' · открыт' : ''}`;

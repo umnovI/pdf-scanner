@@ -258,8 +258,8 @@ main {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
-  padding: 4px 6px;
+  gap: 4px;
+  padding: 4px 2px;
   min-width: 50px;
 }
 .tool small { font-size: 11px; color: #aaa; }
@@ -431,9 +431,9 @@ body:has(#editor:not([hidden]), #sheet:not([hidden]), #projects:not([hidden]), #
   align-items: center;
   justify-content: center;
 }
-.project-thumb::before { content: "📄"; font-size: 20px; opacity: .5; }
-.project-thumb:has(img:not([hidden]))::before { content: none; }
-.project-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.project-thumb { position: relative; color: var(--muted); }
+.project-thumb .icon { width: 22px; height: 22px; opacity: .6; }
+.project-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .project-info { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .project-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-meta { font-size: 13px; color: var(--muted); }
@@ -487,3 +487,32 @@ body:has(#editor:not([hidden]), #sheet:not([hidden]), #projects:not([hidden]), #
 .about-list dt { color: var(--muted); font-size: 14px; }
 .about-list dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 .text-btn.link { text-align: center; text-decoration: none; }
+
+/* ---------- Иконки ---------- */
+.icon {
+  width: 1.25em;
+  height: 1.25em;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vertical-align: -0.25em;
+}
+.empty-icon { color: var(--muted); }
+.empty-icon .icon { width: 64px; height: 64px; stroke-width: 1.5; }
+.action .icon { width: 22px; height: 22px; }
+.tool .icon { width: 26px; height: 26px; }
+.menu-btn .icon { width: 24px; height: 24px; }
+.menu button { display: flex; align-items: center; gap: 12px; }
+.menu button .icon { width: 20px; height: 20px; color: var(--muted); }
+.menu button.danger .icon { color: var(--danger); }
+.project-btn .icon { width: 22px; height: 22px; color: var(--primary); }
+.project-btn .caret { width: 16px; height: 16px; color: var(--muted); }
+.page .row button { display: flex; align-items: center; justify-content: center; }
+.page .row .icon { width: 20px; height: 20px; }
+.more-btn { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.more-btn .icon { width: 22px; height: 22px; }
+.project-rename .icon, .project-delete .icon { width: 20px; height: 20px; }
+.project-rename, .project-delete { display: flex; align-items: center; justify-content: center; }

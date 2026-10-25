@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
-  addFromGallery, addSigs, bannerVisible, checkUpdate, editorDone, launch, openApp, openEditor, pageSigs,
+  addFromGallery, addSigs, bannerVisible, checkUpdate, editorDone, isClickable, launch, openApp, openEditor, pageSigs,
   startServer, swBarrier, swReady, waitPages,
 } from '../helpers.mjs';
 
@@ -105,13 +105,7 @@ describe('обновление версии', () => {
       await page.waitForSelector('#update', { state: 'visible' });
       await openEditor(page, 1);
       assert.equal(await bannerVisible(page), false, 'поверх редактора плашки быть не должно');
-      for (const sel of ['#ed-cancel', '#ed-done']) {
-        const hit = await page.evaluate(s => {
-          const r = document.querySelector(s).getBoundingClientRect();
-          return !!document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest(s);
-        }, sel);
-        assert.ok(hit, `${sel} закрыта другим элементом`);
-      }
+      for (const sel of ['#ed-cancel', '#ed-done']) assert.ok(await isClickable(page, sel), `${sel} закрыта другим элементом`);
       await page.click('#ed-cancel');
       await page.waitForSelector('#editor[hidden]', { state: 'attached' });
     } finally { await srv.close(); }

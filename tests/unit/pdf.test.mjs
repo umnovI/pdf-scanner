@@ -1,21 +1,13 @@
 // Модуль pdf.js: разбор JPEG и сборка PDF.
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { inApp, launch, parsePdf, startServer, unitPage } from '../helpers.mjs';
+import { PDF_SHAPES, buildPdfBytes, inApp, launch, parsePdf, startServer, unitPage } from '../helpers.mjs';
 
 let server, browser;
 before(async () => { server = await startServer(); browser = await launch(); });
 after(async () => { await browser?.close(); await server?.close(); });
 
-/** Собирает PDF из JPEG заданных размеров [[w, h], …] и возвращает его байты. */
-async function build(page, sizes, opts = {}) {
-  const b64 = await inApp(page, async ({ pdf, util }, { sizes, opts }) => {
-    const jpegs = [];
-    for (const [w, h] of sizes) jpegs.push(await util.mkJpeg(w, h));
-    return util.b64(await pdf.buildPdf(jpegs, opts));
-  }, { sizes, opts });
-  return Buffer.from(b64, 'base64');
-}
+const build = buildPdfBytes;
 
 /** Положение картинок на страницах: из потока «q w 0 0 h x y cm». */
 const placements = buf => [...buf.toString('latin1').matchAll(/q ([\d.]+) 0 0 ([\d.]+) ([\d.]+) ([\d.]+) cm \/Im0 Do Q/g)]
@@ -95,10 +87,7 @@ describe('jpegInfo', () => {
 
 describe('buildPdf', () => {
   const A4 = [0, 0, 595.28, 841.89], LETTER = [0, 0, 612, 792];
-  const SHAPES = {
-    'вертикальное': [300, 400], 'горизонтальное': [400, 300], 'квадрат': [300, 300],
-    'узкое вертикальное': [50, 600], 'узкое горизонтальное': [600, 50], 'крошечное': [1, 1],
-  };
+  const SHAPES = PDF_SHAPES;
 
   test('таблица xref верна, число страниц и размеры картинок совпадают', async () => {
     const { page } = await unitPage(browser, server);

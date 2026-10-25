@@ -657,6 +657,7 @@ function openMerge() {
   merge.items = [];
   merge.result = null;
   $('merge-name').value = 'Объединённый ' + new Date().toLocaleDateString('ru-RU');
+  resetMergeResult();
   renderMerge();
   $('merge').hidden = false;
 }
@@ -845,7 +846,9 @@ async function makeCompress() {
       },
     });
     const sizes = `${formatSize(r.original)} → ${formatSize(r.blob.size)}`;
-    if (r.fits) {
+    if (!r.fits && !r.images) {
+      out.textContent = `Сжать до ${formatSize(target)} не получилось: в файле нет картинок, которые можно уменьшить, — только текст и шрифты (${sizes}).`;
+    } else if (r.fits) {
       out.textContent = `Готово: ${sizes}` + (r.level < 0 ? ' (без потери качества)' : '');
     } else if (r.blob.size < r.original) {
       out.textContent = `Уложиться в ${formatSize(target)} не получилось: меньше ${formatSize(r.blob.size)} не сжать (${sizes}). ` +

@@ -352,15 +352,18 @@ export class PdfDoc {
       if (first) { this.trailer = trailer; first = false; }
       if (trailer.has('Encrypt') && !this.trailer.has('Encrypt')) this.trailer.set('Encrypt', trailer.get('Encrypt'));
       // Гибридные файлы: дополнительная сжатая таблица.
+      // Объекты из сжатой таблицы в обычной могут быть помечены свободными —
+      // для этой ревизии сжатая таблица их дополняет.
       const stm = trailer.get('XRefStm');
-      if (typeof stm === 'number' && !seen.has(stm)) { seen.add(stm); await this.readXrefAt(stm); }
+      if (typeof stm === 'number' && !seen.has(stm)) { seen.add(stm); await this.readXrefAt(stm, this.freed); }
       offset = typeof trailer.get('Prev') === 'number' ? trailer.get('Prev') : null;
     }
     if (!this.trailer.has('Root')) throw new Error('нет Root');
   }
 
   // Читает одну таблицу (обычную или сжатую); более новые записи не перезаписываются.
-  async readXrefAt(offset) {
+  async readXrefAt(offset, overridable = null) {
+    this.freed = new Set(); // номера, помеченные свободными в этой таблице
     if (offset < 0 || offset >= this.bytes.length) throw new Error('startxref за пределами файла');
     const lx = new Lexer(this.bytes, offset);
     if (lx.peekWord() === 'xref') {
@@ -368,12 +371,18 @@ export class PdfDoc {
       for (;;) {
         const w = lx.peekWord();
         if (w === 'trailer') { lx.word(); break; }
-        const start = +lx.word(), count = +lx.word();
-        if (!Number.isFinite(start) || !Number.isFinite(count)) throw new Error('повреждённая xref');
+        const sw = lx.word(), cw = lx.word();
+        // Мусор вместо чисел — таблица повреждена (иначе цикл не сдвинется с места).
+        if (!/^\d+$/.test(sw) || !/^\d+$/.test(cw)) throw new Error('повреждённая xref');
+        const start = +sw, count = +cw;
         for (let i = 0; i < count; i++) {
-          const off = +lx.word(), gen = +lx.word(), kind = lx.word();
+          const ow = lx.word(), gw = lx.word(), kind = lx.word();
+          if (!/^\d+$/.test(ow) || !/^\d+$/.test(gw) || (kind !== 'n' && kind !== 'f')) throw new Error('повреждённая xref');
+          const off = +ow, gen = +gw;
           const n = start + i;
-          if (!this.xref.has(n)) this.xref.set(n, kind === 'n' && off > 0 ? { type: 1, offset: off, gen } : { type: 0 });
+          if (this.xref.has(n)) continue;
+          if (kind === 'n' && off > 0) this.xref.set(n, { type: 1, offset: off, gen });
+          else { this.xref.set(n, { type: 0 }); this.freed.add(n); }
         }
       }
       const trailer = lx.value();
@@ -402,7 +411,7 @@ export class PdfDoc {
       for (let i = 0; i < count && p + rowLen <= data.length; i++) {
         const type = field(w[0], 1), f2 = field(w[1], 0), f3 = field(w[2], 0);
         const n = start + i;
-        if (this.xref.has(n)) continue;
+        if (this.xref.has(n) && !(overridable?.has(n) && type !== 0)) continue;
         if (type === 1) this.xref.set(n, { type: 1, offset: f2, gen: f3 });
         else if (type === 2) this.xref.set(n, { type: 2, stm: f2, idx: f3 });
         else this.xref.set(n, { type: 0 });

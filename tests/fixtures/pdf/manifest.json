@@ -1,0 +1,206 @@
+{
+ "text.pdf": {
+  "pages": 3,
+  "marks": [
+   "TEXT-P1",
+   "TEXT-P2",
+   "TEXT-P3"
+  ],
+  "mediaBoxes": [
+   [
+    0,
+    0,
+    595,
+    842
+   ],
+   [
+    0,
+    0,
+    612,
+    792
+   ],
+   [
+    0,
+    0,
+    595,
+    420
+   ]
+  ]
+ },
+ "objstm.pdf": {
+  "pages": 3,
+  "marks": [
+   "TEXT-P1",
+   "TEXT-P2",
+   "TEXT-P3"
+  ],
+  "note": "объектные потоки + xref-поток"
+ },
+ "linearized.pdf": {
+  "pages": 3,
+  "marks": [
+   "TEXT-P1",
+   "TEXT-P2",
+   "TEXT-P3"
+  ],
+  "note": "линеаризованный"
+ },
+ "incremental.pdf": {
+  "pages": 3,
+  "marks": [
+   "TEXT-P1",
+   "TEXT-P2",
+   "TEXT-P3"
+  ],
+  "rotates": [
+   90,
+   0,
+   0
+  ],
+  "note": "/Prev: у первой страницы /Rotate 90 из новой ревизии (в старой 0)"
+ },
+ "bad-startxref.pdf": {
+  "pages": 3,
+  "marks": [
+   "TEXT-P1",
+   "TEXT-P2",
+   "TEXT-P3"
+  ],
+  "note": "startxref за пределами файла"
+ },
+ "shifted.pdf": {
+  "pages": 3,
+  "marks": [
+   "TEXT-P1",
+   "TEXT-P2",
+   "TEXT-P3"
+  ],
+  "note": "лишние байты после заголовка: смещения xref неверны"
+ },
+ "junk-prefix.pdf": {
+  "pages": 3,
+  "marks": [
+   "TEXT-P1",
+   "TEXT-P2",
+   "TEXT-P3"
+  ],
+  "note": "мусор перед %PDF-"
+ },
+ "truncated.pdf": {
+  "pages": 3,
+  "marks": [
+   "TEXT-P1",
+   "TEXT-P2",
+   "TEXT-P3"
+  ],
+  "note": "обрезан: нет xref и trailer"
+ },
+ "encrypted.pdf": {
+  "encrypted": true
+ },
+ "encrypted-objstm.pdf": {
+  "encrypted": true,
+  "note": "AES-256 + xref-поток"
+ },
+ "inherited.pdf": {
+  "pages": 3,
+  "marks": [
+   "TEXT-P1",
+   "TEXT-P2",
+   "TEXT-P3"
+  ],
+  "mediaBoxes": [
+   [
+    0,
+    0,
+    300,
+    400
+   ],
+   [
+    0,
+    0,
+    200,
+    100
+   ],
+   [
+    0,
+    0,
+    300,
+    400
+   ]
+  ],
+  "rotates": [
+   180,
+   90,
+   180
+  ],
+  "note": "Resources/MediaBox/Rotate лежат в /Pages; у страницы 2 свои MediaBox и Rotate"
+ },
+ "link.pdf": {
+  "pages": 3,
+  "marks": [
+   "TEXT-P1",
+   "TEXT-P2",
+   "TEXT-P3"
+  ],
+  "note": "страница 1: ссылка /Dest на страницу 3 и /A GoTo на страницу 2; есть закладки"
+ },
+ "hybrid.pdf": {
+  "pages": 1,
+  "marks": [
+   "HYB-P1"
+  ],
+  "mediaBoxes": [
+   [
+    0,
+    0,
+    400,
+    500
+   ]
+  ],
+  "note": "гибридный: объектов потока в таблице нет, они описаны в /XRefStm"
+ },
+ "images.pdf": {
+  "pages": 11,
+  "marks": [
+   "IMG-P1",
+   "IMG-P2",
+   "IMG-P3",
+   "IMG-P4",
+   "IMG-P5",
+   "IMG-P6",
+   "IMG-P7",
+   "IMG-P8",
+   "IMG-P9",
+   "IMG-P10",
+   "IMG-P11"
+  ],
+  "images": {
+   "1": "ASCII85+DCT RGB",
+   "2": "Flate RGB",
+   "3": "Flate Gray + PNG-предиктор",
+   "4": "Flate RGB + SMask",
+   "5": "CMYK DCT (+Decode)",
+   "6": "DCT Gray",
+   "7": "Flate ICCBased N=3",
+   "8": "малая картинка",
+   "9": "ImageMask",
+   "10": "Indexed",
+   "11": "Flate RGB + цветовая маска /Mask [..]"
+  }
+ },
+ "exif.pdf": {
+  "pages": 1,
+  "marks": [
+   "EXIF-P1"
+  ],
+  "note": "JPEG 400x600 с EXIF Orientation=6; PDF-просмотрщики поворот игнорируют"
+ },
+ "lowq.pdf": {
+  "pages": 1,
+  "marks": [
+   "LOWQ-P1"
+  ],
+  "note": "JPEG качества 3: перекодирование на высоких уровнях делало бы его больше"
+ }
+}

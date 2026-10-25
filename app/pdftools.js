@@ -118,50 +118,52 @@ const INHERITED = ['Resources', 'MediaBox', 'CropBox', 'Rotate'];
  */
 async function copyPages(writer, docs, parentRef, onProgress) {
   const pages = [];
-  const map = new Map(); // `${doc.id}:${num}` → новый номер
+  const map = new Map(); // `${номер источника}:${num}` → новый номер
   const queue = [];
-  const key = (doc, num) => `${doc.id}:${num}`;
-  const refFor = (doc, ref) => {
-    const k = key(doc, ref.num);
+  // Ключ — номер источника по порядку, а не документ: один и тот же документ,
+  // переданный дважды, копируется дважды независимо.
+  const key = (src, num) => `${src}:${num}`;
+  const refFor = (src, doc, ref) => {
+    const k = key(src, ref.num);
     let n = map.get(k);
-    if (n === undefined) { n = writer.alloc(); map.set(k, n); queue.push([doc, ref, n]); }
+    if (n === undefined) { n = writer.alloc(); map.set(k, n); queue.push([src, doc, ref, n]); }
     return new Ref(n, 0);
   };
   // Номера страниц выделяются заранее — ссылки между страницами сохраняются.
-  for (const doc of docs) {
+  docs.forEach((doc, src) => {
     for (const p of doc.pageRefs) {
       const n = writer.alloc();
-      map.set(key(doc, p.ref.num), n);
-      pages.push({ doc, page: p, n });
+      map.set(key(src, p.ref.num), n);
+      pages.push({ src, doc, page: p, n });
     }
-  }
-  const remap = (doc, v, depth = 0) => {
+  });
+  const remap = (src, doc, v, depth = 0) => {
     if (depth > 100) return null;
-    if (v instanceof Ref) return refFor(doc, v);
-    if (Array.isArray(v)) return v.map(x => remap(doc, x, depth + 1));
+    if (v instanceof Ref) return refFor(src, doc, v);
+    if (Array.isArray(v)) return v.map(x => remap(src, doc, x, depth + 1));
     if (isDict(v)) {
       const d = new Map();
-      for (const [k, x] of v) d.set(k, remap(doc, x, depth + 1));
+      for (const [k, x] of v) d.set(k, remap(src, doc, x, depth + 1));
       return d;
     }
     return v;
   };
   const drain = async () => {
     while (queue.length) {
-      const [doc, ref, n] = queue.shift();
+      const [src, doc, ref, n] = queue.shift();
       const v = await doc.get(ref);
-      if (v instanceof Stream) writer.set(n, new Stream(remap(doc, v.dict), v.raw));
+      if (v instanceof Stream) writer.set(n, new Stream(remap(src, doc, v.dict), v.raw));
       else if (isDict(v) && isName(v.get('Type'), 'Page')) writer.set(n, null); // чужая страница вне списка
-      else writer.set(n, remap(doc, v));
+      else writer.set(n, remap(src, doc, v));
     }
   };
   for (let i = 0; i < pages.length; i++) {
-    const { doc, page, n } = pages[i];
+    const { src, doc, page, n } = pages[i];
     const d = new Map();
     for (const [k, x] of page.dict) if (!PAGE_DROP.has(k)) d.set(k, x);
     for (const k of INHERITED) if (!d.has(k) && page.inherited[k] !== undefined) d.set(k, page.inherited[k]);
     if (!d.has('MediaBox')) d.set('MediaBox', [0, 0, 595.28, 841.89]);
-    const out = remap(doc, d);
+    const out = remap(src, doc, d);
     out.set('Type', name('Page'));
     out.set('Parent', parentRef);
     writer.set(n, out);
@@ -245,6 +247,7 @@ function findImages(writer) {
     if (!(v instanceof Stream) || masks.has(n)) return;
     const d = v.dict;
     if (!isName(d.get('Subtype'), 'Image') || d.get('ImageMask') === true || d.has('Decode')) return;
+    if (Array.isArray(d.get('Mask'))) return; // маска по цвету: после JPEG цвета «поплывут»
     if (v.raw.length < 16 * 1024) return; // мелочь не стоит потерь качества
     const w = d.get('Width'), h = d.get('Height');
     if (typeof w !== 'number' || typeof h !== 'number' || w < 32 || h < 32 || w * h > 40e6) return;
@@ -257,10 +260,32 @@ function findImages(writer) {
   return out;
 }
 
+// JPEG без блоков APP1 с EXIF (остальное — как было).
+export function stripExif(b) {
+  if (b[0] !== 0xFF || b[1] !== 0xD8) return b;
+  const parts = [b.subarray(0, 2)];
+  let p = 2, keep = 2;
+  while (p + 4 <= b.length && b[p] === 0xFF) {
+    const m = b[p + 1];
+    if (m === 0xDA || m === 0xD9) break; // начались данные изображения
+    const len = (b[p + 2] << 8) | b[p + 3];
+    const exif = m === 0xE1 && b[p + 4] === 0x45 && b[p + 5] === 0x78 && b[p + 6] === 0x69 && b[p + 7] === 0x66; // «Exif»
+    if (exif) { parts.push(b.subarray(keep, p)); keep = p + 2 + len; }
+    p += 2 + len;
+  }
+  if (parts.length === 1) return b;
+  parts.push(b.subarray(keep));
+  const out = new Uint8Array(parts.reduce((n, x) => n + x.length, 0));
+  let o = 0;
+  for (const x of parts) { out.set(x, o); o += x.length; }
+  return out;
+}
+
 async function decodeImage(writer, stream, kind, ch) {
   if (kind === 'jpeg') {
-    // PDF не учитывает поворот из EXIF — и мы не должны.
-    return createImageBitmap(new Blob([stream.raw], { type: 'image/jpeg' }), { imageOrientation: 'none' });
+    // PDF не учитывает поворот из EXIF, а браузер учитывает даже с
+    // imageOrientation: 'none' — поэтому EXIF убираем из копии данных.
+    return createImageBitmap(new Blob([stripExif(stream.raw)], { type: 'image/jpeg' }), { imageOrientation: 'none' });
   }
   const d = stream.dict;
   const w = d.get('Width'), h = d.get('Height');
@@ -340,7 +365,8 @@ async function normalizeStreams(writer) {
  * Сжимает PDF так, чтобы он стал не больше target байт (если это возможно).
  * Сначала без потерь (пересборка файла), потом всё сильнее сжимает картинки —
  * подбирает наилучшее качество, при котором файл укладывается в размер.
- * @returns {Promise<{ blob: Blob, fits: boolean, level: number, original: number, pages: number }>}
+ * @returns {Promise<{ blob: Blob, fits: boolean, level: number, original: number, pages: number, images: number }>}
+ *   images — сколько картинок можно сжимать (0 — сжимать нечего)
  *   level: -1 — без потерь; fits=false — уложиться не удалось, blob — самый маленький вариант
  */
 export async function compressPdf(bytes, target, { title, onProgress } = {}) {
@@ -360,12 +386,13 @@ export async function compressPdf(bytes, target, { title, onProgress } = {}) {
     copy.objs = w.objs.slice();
     return copy.toBlob(root, info);
   };
-  const result = (blob, fits, level) => ({ blob, fits, level, original: bytes.length, pages: kids.length });
-
-  const lossless = build();
-  if (lossless.size <= target) return result(lossless, true, -1);
+  let imageCount = 0;
+  const result = (blob, fits, level) => ({ blob, fits, level, original: bytes.length, pages: kids.length, images: imageCount });
 
   const images = findImages(w);
+  imageCount = images.length;
+  const lossless = build();
+  if (lossless.size <= target) return result(lossless, true, -1);
   if (!images.length) return result(lossless, false, -1);
   const originals = new Map(images.map(im => [im.n, w.objs[im.n]]));
 

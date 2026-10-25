@@ -5,7 +5,7 @@ import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import {
   reload, ROOT, appFromCommit, dbProjects,
-  addFromCamera, addFromGallery, addSigs, bannerVisible, checkUpdate, launch, makePdf, openApp, openEditor,
+  addFromCamera, addFromGallery, addSigs, bannerVisible, checkUpdate, launch, makePdf, menuAct, openApp, openEditor,
   pageSigs, startServer, swBarrier, swIdle, swReady, versionText, waitBannerFlag, waitPages,
 } from '../helpers.mjs';
 
@@ -86,6 +86,43 @@ describe('плашка «Обновить»', () => {
     await page.click('#pdf-close');
     await page.waitForSelector('#update', { state: 'visible' });
   }));
+
+  for (const [what, act, close, win] of [
+    ['объединения PDF', 'merge', '#merge-close', '#merge'],
+    ['сжатия PDF', 'compress', '#compress-close', '#compress'],
+  ]) {
+    test(`плашка скрыта, пока открыто окно ${what}, и появляется после его закрытия`, () => scenario(async ({ server, page, errors }) => {
+      await swReady(page);
+      await menuAct(page, act);
+      await page.waitForSelector(`${win}:not([hidden])`);
+      await releaseNew(server, page);
+      await waitBannerFlag(page); // приложение знает об обновлении…
+      assert.equal(await bannerVisible(page), false, '…но не показывает плашку поверх окна');
+      await page.click(close);
+      await page.waitForSelector('#update', { state: 'visible' });
+      assert.deepEqual(errors, []);
+    }));
+  }
+
+  for (const [what, act, win] of [['объединения', 'merge', '#merge'], ['сжатия', 'compress', '#compress']]) {
+    test(`«Обновить» при открытом окне ${what} PDF откладывается: страница не перезагружается`, () => scenario(async ({ server, page, errors }) => {
+      await swReady(page);
+      await menuAct(page, act);
+      await page.waitForSelector(`${win}:not([hidden])`);
+      await page.evaluate(() => { window.__alive = true; });
+      await releaseNew(server, page);
+      await waitBannerFlag(page);
+      // плашка под окном скрыта стилем, поэтому нажимаем программно — как при гонке «открыл окно, пока шла проверка»
+      await page.evaluate(() => document.getElementById('update-btn').click());
+      await page.waitForSelector('#toast:not([hidden])');
+      assert.match(await page.textContent('#toast'), /Обновление отложено/);
+      // тост показан вместо перезагрузки, поэтому страница та же
+      assert.equal(await page.evaluate(() => window.__alive), true, 'страница перезагрузилась');
+      assert.equal(await page.locator(win).isVisible(), true);
+      assert.equal(await versionText(page), 'Версия: aaa1111');
+      assert.deepEqual(errors, []);
+    }));
+  }
 
   test('«Обновить»: загружается новая версия, страницы на месте', () => scenario(async ({ server, page, dialogs, errors }) => {
     await addSigs(page, [0, 1, 2]);

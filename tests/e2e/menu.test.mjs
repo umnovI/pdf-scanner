@@ -38,7 +38,7 @@ describe('меню «⋮»', () => {
     assert.equal(await expanded(page), 'true');
     assert.deepEqual(
       await page.locator('#menu [role="menuitem"]').evaluateAll(els => els.map(e => e.dataset.act)),
-      ['projects', 'new', 'clear', 'update', 'about'],
+      ['projects', 'new', 'merge', 'compress', 'clear', 'update', 'about'],
     );
     await page.click('#btn-menu');
     assert.equal(await menuOpen(page), false);
@@ -145,7 +145,7 @@ describe('меню «⋮»', () => {
       const r = el.getBoundingClientRect();
       return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === el;
     }));
-    assert.deepEqual(hits, [true, true, true, true, true]);
+    assert.deepEqual(hits, [true, true, true, true, true, true, true]);
   }, 'aaa1111'));
 });
 

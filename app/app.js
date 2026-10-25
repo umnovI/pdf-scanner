@@ -16,11 +16,12 @@ const state = {
                       // { id, src, rotation, corners, filter, out, thumb, thumbUrl }
   project: null,      // открытый проект { id, name, created, filter, ids }
   projects: [],       // все проекты (новые сверху); ids актуальны для закрытых
-  memory: new Map(),  // без IndexedDB: страницы закрытых проектов в памяти
+  memory: new Map(),  // страницы закрытых проектов, которые нельзя перечитать из базы
+                      // (нет IndexedDB или есть несохранённые страницы)
   persist: true,
   writes: new Set(),   // незавершённые записи в IndexedDB
   unsaved: new Set(),  // id страниц, последнее сохранение которых не удалось
-  dbFailed: false,     // не удалось удаление/порядок — после перезагрузки всё вернётся
+  dbFailed: new Set(), // id проектов, где не записались удаление/порядок/название
   newVersion: false,   // загружена новая версия приложения
   dbClosed: false,     // база закрыта другой вкладкой — сохранять больше нельзя
   pdf: null,          // готовый PDF { blob, name }
@@ -78,32 +79,38 @@ const writeSeq = new Map();
 
 const pageIds = () => state.pages.map(p => p.id);
 
-// Открытый проект с текущим порядком страниц — то, что пишется в базу.
-function projectRecord() {
-  state.project.ids = pageIds();
-  return { ...state.project, ids: [...state.project.ids] };
+// Актуальные ссылки проекта на фото: у открытого — по текущему списку страниц.
+const idsOf = p => (p === state.project ? pageIds() : p.ids);
+
+// Копия проекта для записи в базу (с актуальным списком страниц).
+function snapshot(p) {
+  if (p === state.project) p.ids = pageIds();
+  return { ...p, ids: [...p.ids] };
 }
-const otherProjects = () => state.projects.filter(p => p.id !== state.project.id);
+const projectRecord = () => snapshot(state.project);
+const otherProjects = () => state.projects.filter(p => p !== state.project).map(snapshot);
 
 // Сохраняет страницу (вместе с проектом и текущим порядком страниц).
 async function persist(p) {
   if (!state.persist) return;
   const seq = (writeSeq.get(p.id) || 0) + 1;
   writeSeq.set(p.id, seq);
+  const projectId = state.project.id;
   const ok = await track(db.savePage(record(p), projectRecord()));
   if (writeSeq.get(p.id) !== seq) return;
   if (ok) {
     state.unsaved.delete(p.id);
-    state.dbFailed = false; // вместе со страницей записан и весь текущий порядок
+    state.dbFailed.delete(projectId); // вместе со страницей записан весь проект
   } else {
     state.unsaved.add(p.id);
   }
 }
 
-// Запись проекта (порядок, удаление страниц). Удачная запись заменяет весь
-// список страниц проекта, поэтому исправляет и последствия прошлых сбоев.
-async function persistOrder(promise) {
-  state.dbFailed = !(await track(promise));
+// Запись проекта (порядок, удаление страниц, название). Удачная запись заменяет
+// весь проект, поэтому исправляет и последствия прошлых сбоев в нём.
+async function persistOrder(promise, projectId = state.project.id) {
+  if (await track(promise)) state.dbFailed.delete(projectId);
+  else state.dbFailed.add(projectId);
 }
 
 function setThumb(p) {
@@ -510,7 +517,10 @@ function setupEditor() {
 // ---------- PDF ----------
 
 function defaultName() {
-  return state.project?.name || 'Scan';
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}`;
+  return `${state.project?.name || 'Скан'} ${stamp}`;
 }
 
 function safeName(s) {
@@ -620,26 +630,32 @@ function downloadPdf() {
 // старые: они остаются в списке, их можно открыть и продолжить.
 
 // Открывает проект: загружает его страницы. remember — запомнить как открытый.
+// Если страницы не загрузились, проект открывается пустым с предупреждением.
 async function openProject(id, { remember = true } = {}) {
   const project = state.projects.find(p => p.id === id) || state.projects[0];
-  if (state.project && !state.persist) state.memory.set(state.project.id, state.pages);
-  if (state.project) state.project.ids = pageIds();
-  let pages = [];
-  if (state.persist) {
+  if (state.project) {
+    state.project.ids = pageIds();
+    // Страницы, которых нет в базе (без IndexedDB или не сохранились), держим
+    // в памяти — иначе при возврате в проект они пропадут.
+    if (!state.persist || state.pages.some(p => state.unsaved.has(p.id))) {
+      state.memory.set(state.project.id, state.pages);
+    } else {
+      state.memory.delete(state.project.id);
+      state.pages.forEach(p => p.thumbUrl && URL.revokeObjectURL(p.thumbUrl));
+    }
+  }
+  let pages = state.memory.get(project.id);
+  if (!pages && state.persist) {
     try {
       pages = await db.loadPages(project.ids);
     } catch (e) {
       console.warn(e);
-      toast('Не удалось открыть проект');
-      return;
+      toast('Не удалось загрузить страницы проекта');
     }
-  } else {
-    pages = state.memory.get(project.id) || [];
   }
-  state.pages.forEach(p => p.thumbUrl && URL.revokeObjectURL(p.thumbUrl));
   state.project = project;
-  state.pages = pages.filter(p => p.src && p.out && p.thumb);
-  state.pages.forEach(setThumb);
+  state.pages = (pages || []).filter(p => p.src && p.out && p.thumb);
+  state.pages.forEach(p => { if (!p.thumbUrl) setThumb(p); });
   if (remember && state.persist) track(db.setCurrent(project.id));
   renderProjectTitle();
   renderList();
@@ -673,19 +689,14 @@ async function renameProject(project) {
   const name = prompt('Название проекта', project.name)?.trim();
   if (!name || name === project.name) return;
   project.name = name;
-  if (project === state.project) {
-    renderProjectTitle();
-    if (state.persist) persistOrder(db.saveProject(projectRecord()));
-  } else if (state.persist) {
-    persistOrder(db.saveProject({ ...project, ids: [...project.ids] }));
-  }
+  if (project === state.project) renderProjectTitle();
+  if (state.persist) persistOrder(db.saveProject(snapshot(project)), project.id);
   renderProjects();
 }
 
 async function deleteProject(project) {
-  const n = project === state.project ? state.pages.length : project.ids.length;
-  if (!confirm(`Удалить проект «${project.name}»${n ? ` и его страницы (${n})` : ''}?`)) return;
-  if (project === state.project) state.project.ids = pageIds();
+  const ids = idsOf(project);
+  if (!confirm(`Удалить проект «${project.name}»${ids.length ? ` и его страницы (${ids.length})` : ''}?`)) return;
   const others = state.projects.filter(p => p !== project);
   let next = null;
   if (project === state.project) {
@@ -693,19 +704,19 @@ async function deleteProject(project) {
     if (!others.length) others.push(next);
   }
   if (state.persist) {
-    const ok = await track(db.deleteProject(
-      { ...project, ids: [...project.ids] },
-      others.map(p => ({ ...p, ids: [...p.ids] })),
-      next && { ...next, ids: [...next.ids] }));
+    const ok = await track(db.deleteProject(snapshot(project), others.map(snapshot), next && snapshot(next)));
     if (!ok) { toast('Не удалось удалить проект'); return; }
   }
-  project.ids.forEach(id => { writeSeq.delete(id); state.unsaved.delete(id); });
+  ids.forEach(id => { writeSeq.delete(id); state.unsaved.delete(id); });
+  (state.memory.get(project.id) || []).forEach(p => p.thumbUrl && URL.revokeObjectURL(p.thumbUrl));
   state.memory.delete(project.id);
+  state.dbFailed.delete(project.id);
   state.projects = others;
   if (next) {
-    state.project = null; // текущий удалён — не сохраняем его страницы при переключении
+    // Открытый проект удалён — его страницы не сохраняем при переключении.
     state.pages.forEach(p => p.thumbUrl && URL.revokeObjectURL(p.thumbUrl));
     state.pages = [];
+    state.project = null;
     await openProject(next.id, { remember: false });
   }
   renderProjects();
@@ -714,19 +725,27 @@ async function deleteProject(project) {
 // --- Окно «Проекты» ---
 
 let projectThumbs = [];
+let renderToken = 0; // миниатюры, догрузившиеся после перерисовки, не используются
 
 function formatDate(ts) {
   return new Date(ts).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
-async function renderProjects() {
-  if ($('projects').hidden) return;
+function releaseProjectThumbs() {
   projectThumbs.forEach(u => URL.revokeObjectURL(u));
   projectThumbs = [];
-  if (state.project) state.project.ids = pageIds();
+}
+
+async function renderProjects() {
+  if ($('projects').hidden) return;
+  const token = ++renderToken;
+  releaseProjectThumbs();
   const list = $('project-list');
   list.textContent = '';
+  const images = new Map(); // id первой страницы → <img>
+  const pending = [];
   for (const p of state.projects) {
+    const ids = idsOf(p);
     const li = document.createElement('li');
     li.className = 'project' + (p === state.project ? ' current' : '');
     li.innerHTML = `
@@ -741,7 +760,7 @@ async function renderProjects() {
       <button class="project-delete" aria-label="Удалить проект">🗑</button>`;
     li.querySelector('.project-title').textContent = p.name;
     li.querySelector('.project-meta').textContent =
-      `${p.ids.length} стр. · ${formatDate(p.created)}${p === state.project ? ' · открыт' : ''}`;
+      `${ids.length} стр. · ${formatDate(p.created)}${p === state.project ? ' · открыт' : ''}`;
     li.querySelector('.project-open').onclick = async () => {
       if (p !== state.project) await openProject(p.id);
       closeProjects();
@@ -749,20 +768,28 @@ async function renderProjects() {
     li.querySelector('.project-rename').onclick = () => renameProject(p);
     li.querySelector('.project-delete').onclick = () => deleteProject(p);
     list.appendChild(li);
-    // Миниатюра первой страницы.
-    const first = p === state.project ? state.pages[0]?.thumb : null;
-    const set = blob => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      projectThumbs.push(url);
-      const im = li.querySelector('img');
-      im.src = url;
-      im.hidden = false;
-    };
-    if (first) set(first);
-    else if (p.ids.length && state.persist) db.loadThumb(p.ids[0]).then(set).catch(() => {});
-    else if (!state.persist) set(state.memory.get(p.id)?.[0]?.thumb);
+    // Миниатюра первой страницы: из памяти, иначе — из базы (одним запросом ниже).
+    const im = li.querySelector('img');
+    const inMemory = (p === state.project ? state.pages : state.memory.get(p.id))?.[0]?.thumb;
+    if (inMemory) showThumb(im, inMemory);
+    else if (ids.length && state.persist) { images.set(ids[0], im); pending.push(ids[0]); }
   }
+  if (!pending.length) return;
+  try {
+    const thumbs = await db.loadThumbs(pending);
+    if (token !== renderToken || $('projects').hidden) return;
+    thumbs.forEach((blob, i) => showThumb(images.get(pending[i]), blob));
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+function showThumb(im, blob) {
+  if (!blob || !im) return;
+  const url = URL.createObjectURL(blob);
+  projectThumbs.push(url);
+  im.src = url;
+  im.hidden = false;
 }
 
 function openProjects() {
@@ -772,8 +799,8 @@ function openProjects() {
 
 function closeProjects() {
   $('projects').hidden = true;
-  projectThumbs.forEach(u => URL.revokeObjectURL(u));
-  projectThumbs = [];
+  renderToken++;
+  releaseProjectThumbs();
 }
 
 function setupProjects() {
@@ -834,10 +861,12 @@ async function reloadForUpdate() {
       toast('Обновление отложено — закройте окно и нажмите «Обновить» ещё раз');
       return;
     }
-    const lost = !state.persist ? state.pages.length : state.pages.filter(p => state.unsaved.has(p.id)).length;
+    // Несохранённые страницы во всех проектах (закрытые с такими — в памяти).
+    const all = [...state.pages, ...[...state.memory.values()].flat()];
+    const lost = !state.persist ? all.length : all.filter(p => state.unsaved.has(p.id)).length;
     let question = '';
     if (lost) question = `Страниц, не сохранённых в браузере: ${lost}. После обновления они пропадут.`;
-    else if (state.dbFailed) question = 'Часть изменений (удаление или порядок страниц) не сохранилась и после обновления отменится.';
+    else if (state.dbFailed.size) question = 'Часть изменений (удаление или порядок страниц) не сохранилась и после обновления отменится.';
     if (question && !confirm(question + ' Обновить?')) return;
     location.reload();
   } finally {

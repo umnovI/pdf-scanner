@@ -90,26 +90,33 @@ export function makeProject(name, filter = 'enhance') {
  * в onWrite, чтобы её можно было дождаться; её сбой не мешает загрузке.
  */
 export async function loadState({ defaultFilter = 'enhance', onWrite = p => p.catch(console.warn) } = {}) {
-  let order, projects = [], current;
-  const legacy = []; // [id, order] — порядок старой версии v1
+  let order, projects = [], current, keys = [];
   await tx('readonly', s => {
     onResult(s.meta.get('order'), r => { order = r?.ids; });
     onResult(s.meta.get('current'), r => { current = r?.id; });
     onResult(s.projects.getAll(), r => { projects = r || []; });
-    // Ключи и поле order без загрузки фото в память.
-    const cur = s.pages.openCursor();
-    cur.onsuccess = () => {
-      const c = cur.result;
-      if (!c) return;
-      legacy.push([c.key, c.value.order ?? 0]);
-      c.continue();
-    };
+    onResult(s.pages.getAllKeys(), r => { keys = r || []; }); // без загрузки фото
   });
-  const existing = new Set(legacy.map(x => x[0]));
+  const existing = new Set(keys);
 
   let changed = false;
   if (!projects.length) {
-    const ids = order || legacy.slice().sort((a, b) => a[1] - b[1]).map(x => x[0]);
+    let ids = order;
+    if (!ids) {
+      // Данные версии v1: порядок — в поле order каждой страницы. Читаем
+      // записи один раз, только при переносе.
+      const legacy = [];
+      await tx('readonly', s => {
+        const cur = s.pages.openCursor();
+        cur.onsuccess = () => {
+          const c = cur.result;
+          if (!c) return;
+          legacy.push([c.key, c.value.order ?? 0]);
+          c.continue();
+        };
+      });
+      ids = legacy.sort((a, b) => a[1] - b[1]).map(x => x[0]);
+    }
     const p = makeProject('Проект 1', defaultFilter);
     p.ids = ids.filter(id => existing.has(id));
     projects = [p];
@@ -122,7 +129,7 @@ export async function loadState({ defaultFilter = 'enhance', onWrite = p => p.ca
   projects.sort((a, b) => b.created - a.created);
   if (!projects.some(p => p.id === current)) { current = projects[0].id; changed = true; }
   const used = new Set(projects.flatMap(p => p.ids));
-  const orphans = [...existing].filter(id => !used.has(id));
+  const orphans = keys.filter(id => !used.has(id));
   if (changed || orphans.length || order) {
     const fixed = projects.map(p => ({ ...p, ids: [...p.ids] }));
     onWrite(tx('readwrite', s => {
@@ -144,11 +151,13 @@ export async function loadPages(ids) {
   return out.filter(Boolean);
 }
 
-/** Миниатюра страницы (для списка проектов) или null. */
-export async function loadThumb(id) {
-  let thumb = null;
-  await tx('readonly', s => onResult(s.pages.get(id), p => { thumb = p?.thumb || null; }));
-  return thumb;
+/** Миниатюры страниц по списку id (null, если страницы нет) — одним запросом. */
+export async function loadThumbs(ids) {
+  const out = ids.map(() => null);
+  await tx('readonly', s => {
+    ids.forEach((id, i) => onResult(s.pages.get(id), p => { out[i] = p?.thumb || null; }));
+  });
+  return out;
 }
 
 /** Сохраняет страницу вместе с проектом (порядок, название, фильтр). */

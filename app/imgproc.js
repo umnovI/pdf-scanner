@@ -545,8 +545,9 @@ function orderCorners(pts) {
   return [0, 1, 2, 3].map(i => sorted[(start + i) % 4]);
 }
 
-// Ищет лист на фоне тремя способами — по яркости, по отличию цвета от фона и по
-// оттенку (для жёлтых грамот, цветных бланков и т.п.) — и берёт лучший результат.
+// Ищет лист на фоне четырьмя способами — по яркости, по отличию цвета от фона,
+// по оттенку (жёлтые грамоты, цветные бланки) и заливкой фона от краёв кадра
+// (листы с тёмной узорной рамкой) — и берёт лучший результат.
 // Возвращает углы (TL, TR, BR, BL) в долях от размера или null.
 export function detectDocument(canvas) {
   const small = drawScaled(canvas, 320);
@@ -573,10 +574,12 @@ export function detectDocument(canvas) {
   // 2) По цвету: чем пиксель отличается от цвета фона по краям кадра.
   const band = Math.max(2, Math.round(Math.min(w, h) * 0.04));
   const border = [[], [], []];
+  const bandIdx = []; // пиксели полосы у края кадра
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       if (x >= band && x < w - band && y >= band && y < h - band) continue;
       const i = y * w + x;
+      bandIdx.push(i);
       for (let c = 0; c < 3; c++) border[c].push(ch[c][i]);
     }
   }
@@ -613,16 +616,78 @@ export function detectDocument(canvas) {
     found.push(quadFromMask(m3, w, h));
   }
 
+  // 4) Заливка фона от краёв кадра: всё, что похоже на стол и связано с краем
+  //    снимка, — фон, остальное — лист. Так находится лист с широкой тёмной
+  //    узорной рамкой (грамоты, дипломы): узор отличается от стола, и заливка
+  //    останавливается на краю листа, а способы выше видят только светлую середину.
+  const flood = quadFromMask(backgroundFlood(D, w, h, bandIdx), w, h);
+  if (flood) flood.flood = true;
+  found.push(flood);
+
   // Важна и форма, и размер: цветная шапка или таблица внутри листа тоже
   // бывает ровным прямоугольником, но она меньше самого листа. Пятна,
-  // слившиеся с фоном у края кадра, штрафуются.
+  // слившиеся с фоном у края кадра, штрафуются. У настоящего листа вдоль всех
+  // четырёх краёв изнутри — бумага одной яркости; рамка, захватившая тень или
+  // предмет рядом, на одной из сторон заметно темнее.
+  for (const f of found) if (f) f.sides = sideRatio(f.quad, L, w, h);
   const weight = f => f.rect ** 4 * Math.sqrt(f.area) * (f.center ? 1 : 0.6) *
-    Math.max(0.1, 1 - 2 * f.frame);
+    Math.max(0.1, 1 - 2 * f.frame) * Math.min(1, f.sides / 0.6);
   const ok = found.filter(f => f && f.rect >= 0.6).sort((a, b) => weight(b) - weight(a));
   if (!ok.length) return null;
+  // Заливка — только если она лучше всех: её область всегда не меньше листа,
+  // и при равенстве она отбирала бы победу у точного варианта.
+  if (ok[0].flood) return ok[0].quad;
   // Почти равные варианты: берём больший — меньший обычно «откусил» край листа в тени.
-  const close = ok.filter(f => weight(f) >= weight(ok[0]) * 0.85);
+  const close = ok.filter(f => !f.flood && weight(f) >= weight(ok[0]) * 0.85);
   return close.sort((a, b) => b.area - a.area)[0].quad;
+}
+
+// Маска «не фон»: заливка от краёв кадра по пикселям, близким к цвету фона.
+// D — расстояние до цвета фона, bandIdx — пиксели полосы у края кадра.
+// Допуск — по медиане разброса в полосе: даже если лист заходит в полосу
+// (снято вплотную), медиана остаётся фоном.
+// Ограничение: сильная тень, заходящая и на стол, и на лист при слабом
+// контрасте листа со столом, — заливка затекает на лист (как и способы выше).
+function backgroundFlood(D, w, h, bandIdx) {
+  const n = w * h;
+  const bandD = bandIdx.map(i => D[i]).sort((a, b) => a - b);
+  const tol = Math.min(50, Math.max(15, 3 * bandD[bandD.length >> 1] + 10));
+  const bg = new Uint8Array(n);
+  const stack = new Int32Array(n);
+  let sp = 0;
+  const seed = i => { if (!bg[i] && D[i] < tol) { bg[i] = 1; stack[sp++] = i; } };
+  for (let x = 0; x < w; x++) { seed(x); seed((h - 1) * w + x); }
+  for (let y = 0; y < h; y++) { seed(y * w); seed(y * w + w - 1); }
+  while (sp) {
+    const i = stack[--sp];
+    const x = i % w;
+    if (x > 0) seed(i - 1);
+    if (x < w - 1) seed(i + 1);
+    if (i >= w) seed(i - w);
+    if (i < n - w) seed(i + w);
+  }
+  for (let i = 0; i < n; i++) bg[i] ^= 1;
+  return bg;
+}
+
+// Яркость бумаги вдоль сторон четырёхугольника (чуть внутри): отношение самой
+// тёмной стороны к самой светлой (1 — одинаково, у настоящего листа близко к 1).
+function sideRatio(quad, L, w, h) {
+  const cx = quad.reduce((s, p) => s + p[0], 0) / 4, cy = quad.reduce((s, p) => s + p[1], 0) / 4;
+  const sides = [];
+  for (let k = 0; k < 4; k++) {
+    const [ax, ay] = quad[k], [bx, by] = quad[(k + 1) % 4];
+    const vals = [];
+    for (let t = 0.1; t <= 0.9; t += 0.04) {
+      // Точка на стороне, сдвинутая на 4% к центру.
+      const px = ax + (bx - ax) * t, py = ay + (by - ay) * t;
+      const x = Math.round((px + (cx - px) * 0.04) * w - 0.5), y = Math.round((py + (cy - py) * 0.04) * h - 0.5);
+      if (x >= 0 && x < w && y >= 0 && y < h) vals.push(L[y * w + x]);
+    }
+    vals.sort((a, b) => a - b);
+    sides.push(vals.length ? vals[vals.length >> 1] : 0);
+  }
+  return (Math.min(...sides) + 1) / (Math.max(...sides) + 1);
 }
 
 function polygonArea(q) {

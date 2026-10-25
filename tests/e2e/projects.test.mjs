@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
-  activeFilter, addFromCamera, addFromGallery, addSigs, closeProjects, dbProjects, dbRecords, editorDone, idbFailInit,
+  reload, activeFilter, addFromCamera, addFromGallery, addSigs, closeProjects, dbProjects, dbRecords, editorDone, idbFailInit,
   launch, makePdf, newProject, openApp, openEditor, openProjectAt, openProjects, pageCount, pageSigs, pageStamp,
   projectRows, startServer, swReady, waitCurrentSaved, waitName, waitPages,
 } from '../helpers.mjs';
@@ -74,7 +74,7 @@ describe('новый проект и переключение', () => {
     await addSigs(page, [0, 1]);
     await newProject(page);                      // Проект 2 — пустой, открыт
     await addSigs(page, [3]);
-    await page.reload();
+    await reload(page);
     await waitName(page, 'Проект 2');
     await waitPages(page, 1);
     assert.deepEqual(await pageSigs(page), [3]);
@@ -82,7 +82,7 @@ describe('новый проект и переключение', () => {
     await openProjectAt(page, 2);                // вернулись в Проект 1
     await waitPages(page, 2);
     await waitCurrentSaved(page, 'Проект 1');
-    await page.reload();
+    await reload(page);
     await waitName(page, 'Проект 1');
     await waitPages(page, 2);
     assert.deepEqual(await pageSigs(page), [0, 1]);
@@ -92,7 +92,7 @@ describe('новый проект и переключение', () => {
     const { page } = await openApp(browser, server);
     await addSigs(page, [0]);
     await newProject(page);
-    await page.reload();
+    await reload(page);
     await waitName(page, 'Проект 2');
     assert.equal(await pageCount(page), 0);
     assert.equal((await dbProjects(page)).projects.length, 2);
@@ -120,7 +120,7 @@ describe('новый проект и переключение', () => {
     await openProjectAt(page, 1);
     await waitPages(page, 3);
     assert.deepEqual(await pageSigs(page), [2, 3, 4]);
-    await page.reload();
+    await reload(page);
     await waitName(page, 'Проект 2');
     await waitPages(page, 3);
     await openProjectAt(page, 2);
@@ -138,7 +138,7 @@ describe('переименование', () => {
     assert.equal(seen.type, 'prompt');
     assert.equal(seen.defaultValue, 'Проект 1');
     assert.deepEqual(await names(page), ['Отпуск 2026']);
-    await page.reload();
+    await reload(page);
     await waitName(page, 'Отпуск 2026');
     assert.deepEqual(errors, []);
   });
@@ -162,7 +162,7 @@ describe('переименование', () => {
     assert.deepEqual(await names(page), ['Проект 2', 'Старый']);
     assert.equal(await page.textContent('#project-name'), 'Проект 2');
     await closeProjects(page);
-    await page.reload();
+    await reload(page);
     await waitName(page, 'Проект 2');
     await openProjects(page);
     assert.deepEqual(await names(page), ['Проект 2', 'Старый']);
@@ -202,7 +202,7 @@ describe('удаление', () => {
     await page.waitForFunction(async () => (await window.raw.all('pages')).length === 2);
     await closeProjects(page);
     await waitCurrentSaved(page, 'Проект 1');
-    await page.reload();
+    await reload(page);
     await waitName(page, 'Проект 1');
     await waitPages(page, 2);
     const db = await dbProjects(page);
@@ -226,7 +226,7 @@ describe('удаление', () => {
     assert.equal(await page.textContent('#project-name'), rows[0].title);
     await closeProjects(page);
     await addSigs(page, [4]);
-    await page.reload();
+    await reload(page);
     await waitPages(page, 1);
     assert.deepEqual(await pageSigs(page), [4]);
     const db = await dbProjects(page);
@@ -252,7 +252,7 @@ describe('удаление', () => {
     const db = await dbProjects(page);
     assert.deepEqual(db.projects.map(p => p.name), ['Проект 2']);
     await closeProjects(page);
-    await page.reload();
+    await reload(page);
     await waitPages(page, 1);
     assert.deepEqual(await pageSigs(page), [2]);
   });
@@ -277,7 +277,7 @@ describe('список проектов: счётчики и миниатюры'
     await newProject(page);
     await addSigs(page, [4]);                     // Проект 2: пропорция 2
     await newProject(page);                       // Проект 3: пусто
-    await page.reload();                          // миниатюры закрытых проектов читаются из базы
+    await reload(page);                          // миниатюры закрытых проектов читаются из базы
     await waitName(page, 'Проект 3');
     await openProjects(page);
     await page.waitForFunction(() => document.querySelectorAll('#project-list .project-thumb img:not([hidden])').length === 2);
@@ -330,7 +330,7 @@ describe('фильтр проекта', () => {
     await page.click('#ed-cancel');
     await addFromGallery(page, ['white.jpg', 'landscape.jpg']);
     assert.deepEqual((await dbRecords(page)).map(r => r.filter), ['doc', 'doc', 'doc', 'doc']);
-    await page.reload();
+    await reload(page);
     await waitPages(page, 4);
     await openEditor(page, 4);
     assert.equal(await activeFilter(page), 'doc');
@@ -342,7 +342,7 @@ describe('фильтр проекта', () => {
     await addFromCamera(page, 'white.jpg');
     await chooseDoc(page);
     await waitPages(page, 1);
-    await page.reload();
+    await reload(page);
     await waitPages(page, 1);
     await addFromGallery(page, ['school.jpg']);
     assert.equal((await dbRecords(page))[1].filter, 'doc');
@@ -400,7 +400,7 @@ describe('фильтр проекта', () => {
     await page.click('#ed-cancel');
 
     await waitCurrentSaved(page, 'Проект 2');
-    await page.reload();
+    await reload(page);
     await waitName(page, 'Проект 2');
     await waitPages(page, 2);
     await addFromGallery(page, ['white.jpg']);
@@ -522,7 +522,7 @@ describe('несохранённые страницы', () => {
     await page.click('#ed-filters [data-f="gray"]');
     await editorDone(page);
     assert.equal((await dbRecords(page)).length, 2, 'вторая страница теперь в базе');
-    await page.reload();
+    await reload(page);
     await waitPages(page, 2);
   }));
 
@@ -531,7 +531,7 @@ describe('несохранённые страницы', () => {
     await failOn(page);
     await openProjects(page);
     await page.click('#project-new');
-    await page.waitForFunction(() => /Не удалось создать проект/.test(document.getElementById('toast').textContent));
+    await page.waitForFunction(() => /Не удалось создать проект/.test(document.getElementById('toast')?.textContent));
     assert.equal(await page.textContent('#project-name'), 'Проект 1');
     assert.equal(await pageCount(page), 1);
     assert.deepEqual(await names(page), ['Проект 1']);

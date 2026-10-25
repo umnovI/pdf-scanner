@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
-  addFromGallery, addSigs, checkUpdate, clearEnabled, clickClear, dbProjects, launch, newProject, openApp, pageCount, startServer,
+  reload, addFromGallery, addSigs, checkUpdate, clearEnabled, clickClear, dbProjects, launch, newProject, openApp, pageCount, startServer,
   swReady, waitBannerFlag, waitPages,
 } from '../helpers.mjs';
 
@@ -80,7 +80,7 @@ describe('меню «⋮»', () => {
     await addSigs(page, [0, 1]);
     await page.click('#btn-menu');
     await page.click('#menu [data-act="new"]');
-    await page.waitForFunction(() => document.getElementById('project-name').textContent === 'Проект 2');
+    await page.waitForFunction(() => document.getElementById('project-name')?.textContent === 'Проект 2');
     assert.equal(await menuOpen(page), false);
     assert.equal(await pageCount(page), 0);
     const db = await dbProjects(page);
@@ -125,7 +125,7 @@ describe('меню «⋮»', () => {
     await page.click('#menu [data-act="update"]');
     await page.waitForSelector('#about:not([hidden])');
     assert.equal(await menuOpen(page), false);
-    await page.waitForFunction(() => document.getElementById('about-update').textContent === 'Установлена последняя версия');
+    await page.waitForFunction(() => document.getElementById('about-update')?.textContent === 'Установлена последняя версия');
   }, 'aaa1111'));
 
   test('«О приложении» открывает окно', () => scenario(async ({ page }) => {
@@ -184,7 +184,7 @@ describe('окно «О приложении»', () => {
     await addFromGallery(page, ['white.jpg']);
     await page.click('#btn-menu');
     await page.click('#menu [data-act="about"]');
-    await page.waitForFunction(() => /^\d+(\.\d)? (КБ|МБ)$/.test(document.getElementById('about-storage').textContent));
+    await page.waitForFunction(() => /^\d+(\.\d)? (КБ|МБ)$/.test(document.getElementById('about-storage')?.textContent));
   }));
 
   test('закрывается кнопкой «Закрыть» и кликом по подложке; кнопка проверки не закрывает окно', () => scenario(async ({ page }) => {
@@ -217,7 +217,7 @@ describe('окно «О приложении»', () => {
     await page.click('#menu [data-act="about"]');
     assert.equal(await page.textContent('#about-update'), '—');
     await page.click('#about-check');
-    await page.waitForFunction(() => document.getElementById('about-update').textContent === 'Установлена последняя версия');
+    await page.waitForFunction(() => document.getElementById('about-update')?.textContent === 'Установлена последняя версия');
     assert.equal(await page.locator('#update').isVisible(), false);
     assert.deepEqual(errors, []);
   }, 'aaa1111'));
@@ -229,7 +229,7 @@ describe('окно «О приложении»', () => {
     await page.click('#menu [data-act="about"]');
     server.publish('def5678');
     await page.click('#about-check');
-    await page.waitForFunction(() => /def5678/.test(document.getElementById('about-update').textContent));
+    await page.waitForFunction(() => /def5678/.test(document.getElementById('about-update')?.textContent));
     // Регрессия: окно просило нажать «Обновить» вверху, а плашка под окном скрыта —
     // теперь кнопка прямо в окне.
     assert.equal(await page.locator('#about-reload').isVisible(), true, 'в окне есть «Обновить сейчас»');
@@ -243,7 +243,7 @@ describe('окно «О приложении»', () => {
     await page.click('#about-close');
     // и «Обновить» работает: страницы на месте
     await page.click('#update-btn');
-    await page.waitForFunction(() => document.getElementById('version').textContent === 'Версия: def5678');
+    await page.waitForFunction(() => document.getElementById('version')?.textContent === 'Версия: def5678');
     await waitPages(page, 1);
     assert.deepEqual(errors, []);
   }, 'abc1234'));
@@ -258,7 +258,7 @@ describe('окно «О приложении»', () => {
     await page.click('#about-check');
     await page.waitForSelector('#about-reload', { state: 'visible', timeout: 15000 });
     await page.click('#about-reload');
-    await page.waitForFunction(() => document.getElementById('version').textContent === 'Версия: def5678');
+    await page.waitForFunction(() => document.getElementById('version')?.textContent === 'Версия: def5678');
     await waitPages(page, 1);
   }, 'abc1234'));
 
@@ -267,7 +267,7 @@ describe('окно «О приложении»', () => {
     server.publish('def5678');
     await page.click('#btn-menu');
     await page.click('#menu [data-act="update"]');
-    await page.waitForFunction(() => /def5678/.test(document.getElementById('about-update').textContent));
+    await page.waitForFunction(() => /def5678/.test(document.getElementById('about-update')?.textContent));
     await page.click('#about-close');
     await page.waitForSelector('#update', { state: 'visible' });
   }, 'abc1234'));
@@ -293,7 +293,7 @@ describe('плашка «Обновить» не перекрывает шапк
       const { server, page } = ctx;
       await addFromGallery(page, ['white.jpg']); // у старой версии «Очистить» появляется в шапке только со страницами
       await swReady(page);
-      await page.reload(); // обычный запуск: вкладка сразу под управлением воркера
+      await reload(page); // обычный запуск: вкладка сразу под управлением воркера
       await waitPages(page, 1);
       await swReady(page);
       server.publish('bbb2222');
@@ -364,7 +364,7 @@ describe('меню сразу после запуска', () => {
       await page.goto(server.url);
       await page.click('#btn-menu');
       await page.click('#menu [data-act="new"]');
-      await page.waitForFunction(() => document.getElementById('project-name').textContent === 'Проект 2');
+      await page.waitForFunction(() => document.getElementById('project-name')?.textContent === 'Проект 2');
       // Через секунду всё ещё открыт новый проект (загрузка не перекрыла его).
       await page.waitForTimeout(1500);
       assert.equal(await page.textContent('#project-name'), 'Проект 2');

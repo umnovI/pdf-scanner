@@ -202,7 +202,7 @@ export const pdfInput = (name, bytes = fx(name.replace(/\.pdf$/, '')), mimeType 
  * variant: 'ok' | 'crlf' (в данные потока попал перевод строки) | 'adler' (неверная контрольная сумма) |
  * 'raw' (без заголовка zlib).
  */
-export function objStmPdf(variant = 'ok', mark = 'OBJ-P1') {
+export function objStmPdf(variant = 'ok', mark = 'OBJ-P1', { info = false } = {}) {
   const members = [
     [2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>'],
     [3, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>'],
@@ -223,14 +223,15 @@ export function objStmPdf(variant = 'ok', mark = 'OBJ-P1') {
   let pos = parts[0].length;
   const add = (n, buf) => { off[n] = pos; parts.push(buf); pos += buf.length; };
   add(1, Buffer.from('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'));
+  if (info) add(7, Buffer.from('7 0 obj\n<< /Title (INFO-OLD) >>\nendobj\n'));
   add(4, Buffer.concat([Buffer.from(`4 0 obj\n<< /Length ${content.length} >>\nstream\n`), content, Buffer.from('\nendstream\nendobj\n')]));
   add(5, Buffer.concat([Buffer.from(`5 0 obj\n<< /Type /ObjStm /N 2 /First ${head.length} /Filter /FlateDecode /Length ${data.length} >>\nstream\n`), data, Buffer.from('\nendstream\nendobj\n')]));
   const rows = [];
   const row = (t, a, b) => rows.push(Buffer.from([t, a >> 8, a & 255, b]));
   row(0, 0, 255); row(1, off[1], 0); row(2, 5, 0); row(2, 5, 1); row(1, off[4], 0); row(1, off[5], 0);
-  off[6] = pos; row(1, pos, 0);
+  off[6] = pos; row(1, pos, 0); if (info) row(1, off[7], 0);
   const xs = zlib.deflateSync(Buffer.concat(rows));
-  add(6, Buffer.concat([Buffer.from(`6 0 obj\n<< /Type /XRef /Size 7 /W [1 2 1] /Root 1 0 R /Filter /FlateDecode /Length ${xs.length} >>\nstream\n`), xs, Buffer.from('\nendstream\nendobj\n')]));
+  add(6, Buffer.concat([Buffer.from(`6 0 obj\n<< /Type /XRef /Size ${info ? 8 : 7} /W [1 2 1] /Root 1 0 R${info ? ' /Info 7 0 R' : ''} /Filter /FlateDecode /Length ${xs.length} >>\nstream\n`), xs, Buffer.from('\nendstream\nendobj\n')]));
   parts.push(Buffer.from(`startxref\n${off[6]}\n%%EOF\n`));
   return new Uint8Array(Buffer.concat(parts));
 }
@@ -252,3 +253,25 @@ export function patchXref(bytes, fn) {
 
 /** Смещение объекта «N 0 obj» в файле. */
 export const offsetOf = (bytes, num) => latin1(bytes).indexOf(`\n${num} 0 obj`) + 1;
+
+import { Writer } from '../app/pdftools.js';
+import { Name as NameCls, name as mkName } from '../app/pdfread.js';
+/**
+ * Плотный PDF без /Info: n страниц, на каждой одна и та же JPEG-картинка (DCT). Пересборка приложением
+ * (добавляет /Info) получается чуть больше исходного.
+ */
+export async function tightImagePdf(jpeg, w, h, n = 3) {
+  const wr = new Writer();
+  const pagesNum = wr.alloc();
+  const kids = [];
+  for (let i = 0; i < n; i++) {
+    const img = wr.add(new Stream(new Map([['Type', mkName('XObject')], ['Subtype', mkName('Image')], ['Width', w], ['Height', h],
+      ['ColorSpace', mkName('DeviceRGB')], ['BitsPerComponent', 8], ['Filter', mkName('DCTDecode')]]), jpeg));
+    const content = wr.add(new Stream(new Map(), Buffer.from('q 400 0 0 400 0 0 cm /Im0 Do Q')));
+    kids.push(wr.add(new Map([['Type', mkName('Page')], ['Parent', new Ref(pagesNum, 0)], ['MediaBox', [0, 0, 400, 400]],
+      ['Resources', new Map([['XObject', new Map([['Im0', img]])]])], ['Contents', content]])));
+  }
+  wr.set(pagesNum, new Map([['Type', mkName('Pages')], ['Kids', kids], ['Count', n]]));
+  const root = wr.add(new Map([['Type', mkName('Catalog')], ['Pages', new Ref(pagesNum, 0)]]));
+  return new Uint8Array(await wr.toBlob(root, null).arrayBuffer());
+}

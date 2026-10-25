@@ -156,7 +156,9 @@ async function copyPages(writer, docs, parentRef, onProgress) {
       // Именованные ссылки (/Dest (имя), /GoTo /D (имя)) — в явные: каталог с
       // именами в результат не копируется, а при объединении имена могли бы совпасть.
       const key = destKey(v);
-      const target = key && dests[src].get(nameKey(v.get(key)));
+      let named = key ? v.get(key) : null;
+      if (named instanceof Ref) named = doc.cache.get(named.num); // уже прочитано в prepareDests
+      const target = key && dests[src].get(nameKey(named));
       if (target) d.set(key, remap(src, doc, target, depth + 1));
       return d;
     }
@@ -216,7 +218,7 @@ async function copyPages(writer, docs, parentRef, onProgress) {
     const res = x => (x instanceof Ref ? writer.objs[x.num] : x);
     const list = x => { const r = res(x); return Array.isArray(r) ? r : []; };
     const d = res(copy.get('D'));
-    const ocgs = list(copy.get('OCGs'));
+    const ocgs = list(copy.get('OCGs')).filter(g => isDict(res(g))); // битые ссылки — мимо
     oc ??= { OCGs: [], ON: [], OFF: [], Order: [], RBGroups: [], Locked: [], AS: [], D: isDict(d) ? d : new Map() };
     oc.OCGs.push(...ocgs);
     if (!isDict(d)) continue;

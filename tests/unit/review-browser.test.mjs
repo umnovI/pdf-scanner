@@ -1,11 +1,12 @@
 // Регрессии по итогам код-ревью, которые честно проверяются только в браузере:
 // Chromium строже Node к хвосту Flate-потока; перекодирование картинок использует canvas.
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import { after, before, describe, test } from 'node:test';
 import { launch, startServer, unitPage } from '../helpers.mjs';
 import { compressInBrowser } from '../browser-pdf.mjs';
-import { PdfDoc, fx, imageInfo, objStmPdf } from '../pdfutil.mjs';
+import { PdfDoc, fx, imageInfo, imagePdf, objStmPdf, tightImagePdf } from '../pdfutil.mjs';
 
 let server, browser;
 before(async () => { server = await startServer(); browser = await launch(); });
@@ -115,5 +116,43 @@ describe('6–7. сжатие картинок', () => {
     // 1 A85+DCT, 2 Flate, 3 Gray, 4 SMask-картинка, 6 Gray DCT, 7 ICC (CMYK, мелкая, ImageMask, Indexed и цветовая маска — нет)
     assert.equal(imgs.images, 6);
     assert.equal((await compressInBrowser(page, fx('text'), 1000)).images, 0);
+  });
+});
+
+describe('3. частичная распаковка: быстро и с испорченным заголовком', () => {
+  const noise = n => crypto.randomBytes(n); // несжимаемые данные: размер упакованного ≈ размеру исходного
+
+  test('обрезанный поток 3–4 МБ распаковывается частично быстро (меньше 1,5 с), без пауз на каждый кусок', async () => {
+    const { page } = await unitPage(browser, server);
+    const full = zlib.deflateSync(noise(4_000_000), { level: 1 });
+    const part = full.subarray(0, Math.floor(full.length * 0.7));
+    assert.ok(part.length > 2_500_000);
+    const t0 = Date.now();
+    const r = await unflate(page, part);
+    const ms = Date.now() - t0;
+    assert.ok(r.length > 1_000_000, JSON.stringify(r));
+    assert.ok(ms < 1500, `${ms} мс`);
+  });
+
+  test('два испорченных байта заголовка zlib и мусор в конце: распаковывается начало данных', async () => {
+    const { page } = await unitPage(browser, server);
+    const payload = noise(60000);
+    const z = zlib.deflateSync(payload);
+    const bad = Buffer.concat([Buffer.from([0x00, 0x00]), z.subarray(2, -4), Buffer.from('мусор после данных, не adler')]);
+    const r = await unflate(page, bad);
+    assert.equal(r.error, undefined, JSON.stringify(r));
+    assert.ok(r.length >= payload.length * 0.9, `${r.length} из ${payload.length}`);
+  });
+});
+
+describe('6. файл с картинками не уменьшился', () => {
+  test('условия: картинки сжимаемые, «без потерь» не меньше исходного, сильнейший уровень тоже', async () => {
+    const { page } = await unitPage(browser, server);
+    const raw = (await imageInfo(await PdfDoc.load(fx('compressed'))))[0].raw;
+    const pdf = await tightImagePdf(raw, 500, 500, 3);
+    const r = await compressInBrowser(page, pdf, 1000);
+    assert.equal(r.images, 3);
+    assert.equal(r.level, -1);
+    assert.ok(r.size >= r.original, `без потерь ${r.size} < исходного ${r.original}: сценарий не тот`);
   });
 });

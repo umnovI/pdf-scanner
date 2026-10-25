@@ -8,7 +8,7 @@ import {
 import { noisyJpegs } from '../browser-pdf.mjs';
 import { mergePdfs } from '../../app/pdftools.js';
 import {
-  PdfDoc, assertValidPdf, fx, handPdf, imageInfo, imagePdf, manifest, pageGeom, pageMarks, pdfInput,
+  PdfDoc, assertValidPdf, fx, handPdf, imageInfo, imagePdf, manifest, pageGeom, pageMarks, pdfInput, tightImagePdf,
 } from '../pdfutil.mjs';
 
 let server, browser, bigPdf, bigImages, manyImages;
@@ -611,6 +611,21 @@ describe('сжатие PDF', () => {
     assert.match(text, /^Сжать не получилось: картинки в файле уже сжаты сильнее/);
     assert.doesNotMatch(text, /нет картинок/);
     assert.equal(await visible(page, '#compress-download'), false, 'скачивать нечего: файл не стал меньше');
+    assert.deepEqual(errors, []);
+  });
+
+  test('картинки есть, «без потерь» получается даже больше исходного: то же сообщение, «Скачать» нет', async () => {
+    const { page, errors } = await openApp(browser, server);
+    const raw = (await imageInfo(await PdfDoc.load(fx('compressed'))))[0].raw;
+    const pdf = await tightImagePdf(raw, 500, 500, 3);
+    await openCompress(page);
+    await page.setInputFiles('#in-compress', pdfInput('плотный', pdf));
+    await page.selectOption('#compress-target', 'custom');
+    await page.fill('#compress-custom', '0.05');
+    await compressMake(page);
+    assert.match(await page.textContent('#compress-result'), /^Сжать не получилось: картинки в файле уже сжаты сильнее/);
+    assert.equal(await visible(page, '#compress-download'), false);
+    assert.equal(await visible(page, '#compress-make'), true);
     assert.deepEqual(errors, []);
   });
 

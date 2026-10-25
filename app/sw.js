@@ -35,7 +35,7 @@ self.addEventListener('activate', e => {
       .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
       // Сообщаем открытым страницам свою версию: так они узнают об обновлении.
-      .then(() => self.clients.matchAll({ type: 'window' }))
+      .then(() => self.clients.matchAll({ type: 'window', includeUncontrolled: true }))
       .then(list => list.forEach(c => c.postMessage({ type: 'version', version: VERSION }))),
   );
 });

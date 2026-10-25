@@ -124,6 +124,7 @@ async function move(i, dir) {
   const j = i + dir;
   if (j < 0 || j >= state.pages.length) return;
   [state.pages[i], state.pages[j]] = [state.pages[j], state.pages[i]];
+  state.pages.forEach((p, k) => { p.order = k; }); // порядок и в памяти, не только в базе
   renderList();
   if (state.persist) persistOther(db.saveOrder(state.pages.map(record)), state.pages.map(p => p.id));
 }
@@ -133,6 +134,8 @@ async function removePage(p) {
   state.pages = state.pages.filter(x => x !== p);
   if (p.thumbUrl) URL.revokeObjectURL(p.thumbUrl);
   renderList();
+  writeSeq.delete(p.id);
+  state.unsaved.delete(p.id);
   if (state.persist) persistOther(db.remove(p.id));
   return true;
 }
@@ -161,7 +164,8 @@ async function addFiles(files, { fromCamera = false, replace = null } = {}) {
       img.release(bitmap);
       const p = {
         id: uid(),
-        order: state.pages.length,
+        // после последней страницы (после удаления номера идут с пропусками)
+        order: state.pages.length ? state.pages[state.pages.length - 1].order + 1 : 0,
         src: await img.toBlob(c, 0.92),
         rotation: 0,
         corners: img.FULL_FRAME.map(pt => [...pt]),
@@ -599,8 +603,8 @@ function downloadPdf() {
 // экране, не чаще раза в 5 минут). Новый воркер, став активным, рассылает свою
 // версию; если она отличается от версии страницы — показываем плашку «Обновить».
 // Поверх редактора, окна PDF и обработки плашка не видна (см. style.css).
-// Вызывать синхронно при запуске модуля: до DOMContentLoaded браузер придерживает
-// сообщения воркера, и рассылка, пришедшая раньше, не потеряется.
+// Пока доставка не включена (startMessages), браузер придерживает сообщения
+// воркера — рассылка, пришедшая до загрузки скрипта, не потеряется.
 function setupUpdates() {
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
@@ -608,6 +612,7 @@ function setupUpdates() {
   sw.addEventListener('message', e => {
     if (e.data?.type === 'version') $('update').hidden = e.data.version === BUILD;
   });
+  sw.startMessages(); // явно включаем доставку (addEventListener сам её не включает)
   // Вкладка вернулась из кэша браузера и могла пропустить рассылку — спрашиваем сами.
   window.addEventListener('pageshow', e => {
     if (e.persisted) sw.controller?.postMessage({ type: 'version' });
@@ -679,7 +684,12 @@ function setup() {
     state.pages.forEach(p => p.thumbUrl && URL.revokeObjectURL(p.thumbUrl));
     state.pages = [];
     renderList();
-    if (state.persist) persistOther(db.clear());
+    writeSeq.clear();
+    state.unsaved.clear();
+    if (state.persist) {
+      // Удачная очистка делает базу снова согласованной с экраном.
+      track(db.clear()).then(ok => { state.dbFailed = !ok; });
+    }
   };
 
   $('pdf-make').onclick = makePdf;

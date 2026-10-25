@@ -382,4 +382,8 @@ main {
 /* Пока открыт редактор, окно PDF или идёт обработка, плашка не показывается —
    там можно потерять несохранённую работу. */
 body:has(#editor:not([hidden]), #sheet:not([hidden]), #busy:not([hidden])) #update { display: none; }
+/* Для браузеров без :has() (сейчас #update идёт после этих элементов). */
+#editor:not([hidden]) ~ #update,
+#sheet:not([hidden]) ~ #update,
+#busy:not([hidden]) ~ #update { display: none; }
 .version { margin: 4px 0 0; text-align: center; font-size: 12px; color: var(--muted); }

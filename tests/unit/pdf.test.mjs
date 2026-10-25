@@ -7,7 +7,6 @@ let server, browser;
 before(async () => { server = await startServer(); browser = await launch(); });
 after(async () => { await browser?.close(); await server?.close(); });
 
-const build = buildPdfBytes;
 
 /** Положение картинок на страницах: из потока «q w 0 0 h x y cm». */
 const placements = buf => [...buf.toString('latin1').matchAll(/q ([\d.]+) 0 0 ([\d.]+) ([\d.]+) ([\d.]+) cm \/Im0 Do Q/g)]
@@ -87,12 +86,11 @@ describe('jpegInfo', () => {
 
 describe('buildPdf', () => {
   const A4 = [0, 0, 595.28, 841.89], LETTER = [0, 0, 612, 792];
-  const SHAPES = PDF_SHAPES;
 
   test('таблица xref верна, число страниц и размеры картинок совпадают', async () => {
     const { page } = await unitPage(browser, server);
-    const sizes = Object.values(SHAPES);
-    const pdf = parsePdf(await build(page, sizes));
+    const sizes = Object.values(PDF_SHAPES);
+    const pdf = parsePdf(await buildPdfBytes(page, sizes));
     assert.deepEqual(pdf.errors, []);
     assert.equal(pdf.count, sizes.length);
     assert.equal(pdf.pages.length, sizes.length);
@@ -105,8 +103,8 @@ describe('buildPdf', () => {
       for (const margin of [0, 18, 36]) {
         test(`все страницы одного размера: ${size}, ${fit}, поля ${margin}`, async () => {
           const { page } = await unitPage(browser, server);
-          const sizes = Object.values(SHAPES);
-          const buf = await build(page, sizes, { size, fit, margin });
+          const sizes = Object.values(PDF_SHAPES);
+          const buf = await buildPdfBytes(page, sizes, { size, fit, margin });
           const pdf = parsePdf(buf);
           assert.deepEqual(pdf.errors, []);
           assert.equal(pdf.pages.length, sizes.length);
@@ -139,7 +137,7 @@ describe('buildPdf', () => {
   test('размер по умолчанию — A4 без полей, неизвестный размер тоже A4', async () => {
     const { page } = await unitPage(browser, server);
     for (const opts of [{}, { size: 'a5-неизвестный' }]) {
-      const pdf = parsePdf(await build(page, [[300, 400], [400, 300]], opts));
+      const pdf = parsePdf(await buildPdfBytes(page, [[300, 400], [400, 300]], opts));
       assert.deepEqual(pdf.pages, [A4, A4]);
       assert.deepEqual(pdf.errors, []);
     }
@@ -149,7 +147,7 @@ describe('buildPdf', () => {
     const { page } = await unitPage(browser, server);
     for (const n of [1, 40]) {
       const sizes = Array.from({ length: n }, (_, i) => [60 + (i % 5) * 10, 80 + (i % 7) * 10]);
-      const pdf = parsePdf(await build(page, sizes));
+      const pdf = parsePdf(await buildPdfBytes(page, sizes));
       assert.deepEqual(pdf.errors, []);
       assert.equal(pdf.count, n);
       assert.equal(pdf.pages.length, n);
@@ -159,7 +157,7 @@ describe('buildPdf', () => {
   test('кириллица и эмодзи в заголовке не ломают файл', async () => {
     const { page } = await unitPage(browser, server);
     const title = 'Заявление №1 — копия «Ёж» 😀';
-    const buf = await build(page, [[300, 400]], { title });
+    const buf = await buildPdfBytes(page, [[300, 400]], { title });
     assert.deepEqual(parsePdf(buf).errors, []);
     assert.equal(titleOf(buf), title);
     assert.match(buf.toString('latin1'), /\/Producer <FEFF/);
@@ -167,7 +165,7 @@ describe('buildPdf', () => {
 
   test('заголовок по умолчанию — «Скан»', async () => {
     const { page } = await unitPage(browser, server);
-    assert.equal(titleOf(await build(page, [[10, 10]])), 'Скан');
+    assert.equal(titleOf(await buildPdfBytes(page, [[10, 10]])), 'Скан');
   });
 
   test('цветовое пространство берётся из числа каналов JPEG', async () => {
@@ -183,7 +181,7 @@ describe('buildPdf', () => {
 
   test('пустой список страниц даёт корректный файл', async () => {
     const { page } = await unitPage(browser, server);
-    const pdf = parsePdf(await build(page, []));
+    const pdf = parsePdf(await buildPdfBytes(page, []));
     assert.deepEqual(pdf.errors, []);
     assert.equal(pdf.count, 0);
   });

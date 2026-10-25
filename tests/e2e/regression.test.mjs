@@ -82,7 +82,7 @@ describe('обновление версии', () => {
       await swReady(page);
       srv.publish('bbb2222');
       await reload(page);
-      await page.waitForFunction(() => document.getElementById('version').textContent === 'Версия: bbb2222');
+      await page.waitForFunction(() => document.getElementById('version')?.textContent === 'Версия: bbb2222');
       await page.evaluate(() => { window.oldController = navigator.serviceWorker.controller; });
       await checkUpdate(page);
       await page.waitForFunction(() => navigator.serviceWorker.controller !== window.oldController);

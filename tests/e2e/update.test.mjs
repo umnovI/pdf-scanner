@@ -91,7 +91,7 @@ describe('плашка «Обновить»', () => {
     await releaseNew(server, page);
     await page.waitForSelector('#update', { state: 'visible' });
     await page.click('#update-btn');
-    await page.waitForFunction(() => document.getElementById('version').textContent === 'Версия: bbb2222');
+    await page.waitForFunction(() => document.getElementById('version')?.textContent === 'Версия: bbb2222');
     await waitPages(page, 3);
     assert.deepEqual(await pageSigs(page), [0, 1, 2]);
     assert.deepEqual(dialogs, [], 'без несохранённых страниц вопросов быть не должно');
@@ -108,7 +108,7 @@ describe('плашка «Обновить»', () => {
     await releaseNew(server, page, 'bbb2222');
     await page.waitForSelector('#update', { state: 'visible' });
     await page.click('#update-btn');
-    await page.waitForFunction(() => document.getElementById('version').textContent === 'Версия: bbb2222');
+    await page.waitForFunction(() => document.getElementById('version')?.textContent === 'Версия: bbb2222');
     await swReady(page);
     await releaseNew(server, page, 'ccc3333');
     await page.waitForSelector('#update', { state: 'visible' });

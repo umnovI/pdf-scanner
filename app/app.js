@@ -72,12 +72,12 @@ const writeSeq = new Map();
 
 const pageIds = () => state.pages.map(p => p.id);
 
-// Сохраняет страницу; withOrder — вместе с порядком (для новой страницы).
-async function persist(p, { withOrder = false } = {}) {
+// Сохраняет страницу (вместе с текущим порядком страниц).
+async function persist(p) {
   if (!state.persist) return;
   const seq = (writeSeq.get(p.id) || 0) + 1;
   writeSeq.set(p.id, seq);
-  const ok = await track(db.save(record(p), withOrder ? pageIds() : undefined));
+  const ok = await track(db.save(record(p), pageIds()));
   if (writeSeq.get(p.id) !== seq) return;
   if (ok) state.unsaved.delete(p.id); else state.unsaved.add(p.id);
 }
@@ -178,7 +178,7 @@ async function addFiles(files, { fromCamera = false, replace = null } = {}) {
       await processPage(p);
       state.pages.push(p);
       added.push(p);
-      await persist(p, { withOrder: true });
+      await persist(p);
     } catch (e) {
       console.error(e);
       toast(`Не удалось открыть «${files[i].name}»`);
@@ -610,12 +610,12 @@ function setupUpdates() {
   if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
   const sw = navigator.serviceWorker;
   sw.addEventListener('message', e => {
-    if (e.data?.type === 'version') $('update').hidden = e.data.version === BUILD;
+    if (e.data?.type === 'pdf-scanner-version') $('update').hidden = e.data.version === BUILD;
   });
   sw.startMessages(); // включаем доставку явно: addEventListener сам её не включает
   // Вкладка вернулась из кэша браузера и могла пропустить рассылку — спрашиваем сами.
   window.addEventListener('pageshow', e => {
-    if (e.persisted) sw.controller?.postMessage({ type: 'version' });
+    if (e.persisted) sw.controller?.postMessage({ type: 'pdf-scanner-version' });
   });
 
   let lastCheck = Date.now();
@@ -663,6 +663,7 @@ async function restore() {
   } catch (e) {
     console.warn('Сохранение страниц недоступно:', e);
     state.persist = false;
+    if (e.blocked) toast('Закройте другие вкладки «Сканер PDF» и откройте приложение заново', 8000);
   }
   renderList();
 }

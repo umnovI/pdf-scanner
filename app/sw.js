@@ -35,15 +35,15 @@ self.addEventListener('activate', e => {
       .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
       // Сообщаем открытым страницам свою версию: так они узнают об обновлении.
-      .then(() => self.clients.matchAll({ type: 'window' }))
-      .then(list => list.forEach(c => c.postMessage({ type: 'version', version: VERSION }))),
+      .then(() => self.clients.matchAll({ type: 'window', includeUncontrolled: true }))
+      .then(list => list.forEach(c => c.postMessage({ type: 'pdf-scanner-version', version: VERSION }))),
   );
 });
 
 // Страница спрашивает версию, чтобы понять, сменилась ли она.
 self.addEventListener('message', e => {
-  if (e.data && e.data.type === 'version' && e.source) {
-    e.source.postMessage({ type: 'version', version: VERSION });
+  if (e.data && e.data.type === 'pdf-scanner-version' && e.source) {
+    e.source.postMessage({ type: 'pdf-scanner-version', version: VERSION });
   }
 });
 

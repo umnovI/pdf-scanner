@@ -20,20 +20,27 @@ function open() {
         if (!db.objectStoreNames.contains(PAGES)) db.createObjectStore(PAGES, { keyPath: 'id' });
         if (!db.objectStoreNames.contains(META)) db.createObjectStore(META, { keyPath: 'key' });
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        const db = req.result;
+        // Новая версия приложения в другой вкладке обновляет базу — отпускаем её.
+        db.onversionchange = () => db.close();
+        resolve(db);
+      };
       req.onerror = () => reject(req.error);
+      // Базу держит открытой старая версия в другой вкладке — не ждём бесконечно.
+      req.onblocked = () => reject(Object.assign(new Error('База занята другой вкладкой'), { blocked: true }));
     });
   }
   return dbPromise;
 }
 
-// Выполняет fn над обоими хранилищами в одной транзакции.
+// Выполняет fn над обоими хранилищами в одной транзакции; ждёт её завершения.
 async function tx(mode, fn) {
   const db = await open();
   return new Promise((resolve, reject) => {
     const t = db.transaction([PAGES, META], mode);
-    const result = fn(t.objectStore(PAGES), t.objectStore(META));
-    t.oncomplete = () => resolve(result);
+    fn(t.objectStore(PAGES), t.objectStore(META));
+    t.oncomplete = () => resolve();
     t.onerror = () => reject(t.error);
     t.onabort = () => reject(t.error);
   });
@@ -41,37 +48,39 @@ async function tx(mode, fn) {
 
 const putOrder = (meta, ids) => meta.put({ key: 'order', ids });
 
-// Страницы в сохранённом порядке.
+// Страницы в сохранённом порядке. Читаем без записи, а перенос данных старой
+// версии и чистку лишних записей делаем отдельно — их сбой не мешает загрузке.
 export async function loadAll() {
-  const out = { pages: [] };
-  await tx('readwrite', (pages, meta) => {
+  let list = [], ids;
+  await tx('readonly', (pages, meta) => {
     const all = pages.getAll();
     const order = meta.get('order');
-    // Заявки одной транзакции выполняются по очереди: к ответу на вторую
-    // первая уже готова.
-    order.onsuccess = () => {
-      const list = all.result || [];
-      let ids = order.result?.ids;
-      if (!ids) {
-        // Данные старой версии: порядок был в поле order каждой страницы.
-        list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-        ids = list.map(p => p.id);
-        putOrder(meta, ids);
-      }
-      const byId = new Map(list.map(p => [p.id, p]));
-      const keep = new Set(ids);
-      // Страница, которой нет в списке, осталась от неудавшегося удаления — убираем.
-      for (const p of list) if (!keep.has(p.id)) pages.delete(p.id);
-      out.pages = ids.map(id => byId.get(id)).filter(Boolean);
-    };
+    all.onsuccess = () => { list = all.result || []; };
+    order.onsuccess = () => { ids = order.result?.ids; };
   });
-  return out.pages;
+  const fixes = [];
+  if (!ids) {
+    // Данные старой версии: порядок был в поле order каждой страницы.
+    list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    ids = list.map(p => p.id);
+    fixes.push(meta => putOrder(meta, ids));
+  }
+  const keep = new Set(ids);
+  // Страница, которой нет в списке, осталась от неудавшегося удаления.
+  const orphans = list.filter(p => !keep.has(p.id)).map(p => p.id);
+  if (orphans.length) fixes.push((meta, pages) => orphans.forEach(id => pages.delete(id)));
+  if (fixes.length) {
+    tx('readwrite', (pages, meta) => fixes.forEach(f => f(meta, pages))).catch(console.warn);
+  }
+  const byId = new Map(list.map(p => [p.id, p]));
+  return ids.map(id => byId.get(id)).filter(Boolean);
 }
 
-// Сохраняет страницу; если передан порядок — вместе с ним.
+// Сохраняет страницу вместе с текущим порядком (список id — несколько байт),
+// чтобы страница в базе никогда не оказалась вне списка.
 export const save = (page, ids) => tx('readwrite', (pages, meta) => {
   pages.put(page);
-  if (ids) putOrder(meta, ids);
+  putOrder(meta, ids);
 });
 
 export const saveOrder = ids => tx('readwrite', (pages, meta) => { putOrder(meta, ids); });

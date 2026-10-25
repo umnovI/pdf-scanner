@@ -217,5 +217,19 @@
    "LOWQ-P1"
   ],
   "note": "JPEG качества 3: перекодирование на высоких уровнях делало бы его больше"
+ },
+ "compressed.pdf": {
+  "pages": 1,
+  "marks": [
+   "COMP-P1"
+  ],
+  "note": "JPEG уже сжат сильнее, чем умеет приложение на любом уровне"
+ },
+ "matte.pdf": {
+  "pages": 1,
+  "marks": [
+   "MATTE-P1"
+  ],
+  "note": "Flate RGB + SMask с /Matte"
  }
 }

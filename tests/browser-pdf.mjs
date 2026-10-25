@@ -41,7 +41,7 @@ export async function compressInBrowser(page, bytes, target) {
     const out = new Uint8Array(await res.blob.arrayBuffer());
     let bin = '';
     for (let k = 0; k < out.length; k += 8192) bin += String.fromCharCode(...out.subarray(k, k + 8192));
-    return { fits: res.fits, level: res.level, original: res.original, pages: res.pages, size: res.blob.size, b64: btoa(bin), stages, ms: performance.now() - t0 };
+    return { fits: res.fits, level: res.level, original: res.original, pages: res.pages, images: res.images, size: res.blob.size, b64: btoa(bin), stages, ms: performance.now() - t0 };
   }, [Buffer.from(bytes).toString('base64'), target]);
   return { ...r, bytes: new Uint8Array(Buffer.from(r.b64, 'base64')) };
 }

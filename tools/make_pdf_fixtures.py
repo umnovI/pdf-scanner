@@ -317,6 +317,40 @@ Image.fromarray(noisy(1600, 1200, 120, seed=22)).save(buf, "JPEG", quality=3)
 put("lowq.pdf", one_jpeg_pdf(buf.getvalue(), 1600, 1200, "LOWQ-P1"), pages=1, marks=["LOWQ-P1"],
     note="JPEG качества 3: перекодирование на высоких уровнях делало бы его больше")
 
+# JPEG 500x500 из чистого шума: оптимизированные таблицы Хаффмана и прогрессивная развёртка, качество 14.
+# Любое перекодирование приложением (браузерный JPEG, максимум 500 px, качество >= 0,2) получается
+# больше исходного, поэтому сжать нечего
+buf = io.BytesIO()
+Image.fromarray(np.random.default_rng(5).integers(0, 256, (500, 500, 3)).astype("uint8")).save(
+    buf, "JPEG", quality=14, optimize=True, progressive=True)
+put("compressed.pdf", one_jpeg_pdf(buf.getvalue(), 500, 500, "COMP-P1"), pages=1, marks=["COMP-P1"],
+    note="JPEG уже сжат сильнее, чем умеет приложение на любом уровне")
+
+
+# ---------- Картинка с маской, у которой есть /Matte ----------
+def matte_pdf():
+    p = Pdf.new()
+    p.add_blank_page(page_size=(595, 842))
+    pg = p.pages[-1]
+    rgb = noisy(160, 160, 12, seed=31)
+    alpha = np.clip(np.tile(np.linspace(0, 255, 160), (160, 1)) + np.random.default_rng(32).integers(-20, 21, (160, 160)), 0, 255).astype(np.uint8)
+    sm = p.make_stream(zlib.compress(alpha.tobytes(), 6))
+    sm.Type = Name.XObject; sm.Subtype = Name.Image; sm.Width = 160; sm.Height = 160
+    sm.ColorSpace = Name.DeviceGray; sm.BitsPerComponent = 8; sm.Filter = Name.FlateDecode
+    sm.Matte = Array([0, 0, 0])
+    im = p.make_stream(zlib.compress(rgb.tobytes(), 6))
+    im.Type = Name.XObject; im.Subtype = Name.Image; im.Width = 160; im.Height = 160
+    im.ColorSpace = Name.DeviceRGB; im.BitsPerComponent = 8; im.Filter = Name.FlateDecode
+    im.SMask = sm
+    font = p.make_indirect(Dictionary(Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica))
+    pg.Resources = Dictionary(XObject=Dictionary(Im0=im), Font=Dictionary(F1=font))
+    pg.Contents = p.make_stream(b"q 400 0 0 400 50 300 cm /Im0 Do Q BT /F1 24 Tf 50 780 Td (MATTE-P1) Tj ET")
+    b = io.BytesIO(); p.save(b, deterministic_id=True)
+    return b.getvalue()
+
+
+put("matte.pdf", matte_pdf(), pages=1, marks=["MATTE-P1"], note="Flate RGB + SMask с /Matte")
+
 (OUT / "manifest.json").write_text(json.dumps(MANIFEST, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
 total = sum(f.stat().st_size for f in OUT.glob("*.pdf"))
 print(f"{len(MANIFEST)} файлов, {total / 1024:.0f} КБ")

@@ -6,6 +6,7 @@ import {
   addFromGallery, addSigs, idbFailInit, launch, makePdf, menuAct, newProject, openApp, parsePdf, startServer, waitName,
 } from '../helpers.mjs';
 import { noisyJpegs } from '../browser-pdf.mjs';
+import { mergePdfs } from '../../app/pdftools.js';
 import {
   PdfDoc, assertValidPdf, fx, handPdf, imageInfo, imagePdf, manifest, pageGeom, pageMarks, pdfInput,
 } from '../pdfutil.mjs';
@@ -593,6 +594,23 @@ describe('сжатие PDF', () => {
     await page.waitForSelector('#compress-result:not([hidden])', { timeout: 30000 });
     await page.waitForSelector('#busy[hidden]', { state: 'attached' });
     assert.match(await page.textContent('#compress-result'), /нет картинок/);
+    assert.deepEqual(errors, []);
+  });
+
+  test('картинки есть, но уже сжаты сильнее, чем умеет приложение: «уже сжаты», а не «нет картинок»', async () => {
+    const { page, errors } = await openApp(browser, server);
+    // три страницы по 32 КБ — больше минимальной цели 0,05 МБ
+    const three = new Uint8Array(await (await mergePdfs([fx('compressed'), fx('compressed'), fx('compressed')])).blob.arrayBuffer());
+    assert.ok(three.length > 60000);
+    await openCompress(page);
+    await page.setInputFiles('#in-compress', pdfInput('сжатый', three));
+    await page.selectOption('#compress-target', 'custom');
+    await page.fill('#compress-custom', '0.05');
+    await compressMake(page);
+    const text = await page.textContent('#compress-result');
+    assert.match(text, /^Сжать не получилось: картинки в файле уже сжаты сильнее/);
+    assert.doesNotMatch(text, /нет картинок/);
+    assert.equal(await visible(page, '#compress-download'), false, 'скачивать нечего: файл не стал меньше');
     assert.deepEqual(errors, []);
   });
 

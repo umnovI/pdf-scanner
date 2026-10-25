@@ -94,7 +94,7 @@ export function handPdf(pages, { extraObjs = {}, catalogExtra = '', trailerExtra
   pages.forEach((p, i) => {
     const content = p.content ?? `BT /F1 20 Tf 50 100 Td (${p.text}) Tj ET`;
     objs.set(3 + 2 * i, `<< /Type /Page /Parent 2 0 R /MediaBox [${(p.box || [0, 0, 300, 200]).join(' ')}] ` +
-      `/Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>${p.xobjects ? ` /XObject << ${Object.entries(p.xobjects).map(([k, v]) => `/${k} ${v} 0 R`).join(' ')} >>` : ''} >> /Contents ${4 + 2 * i} 0 R ${p.extra || ''} >>`);
+      `/Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >>${p.xobjects ? ` /XObject << ${Object.entries(p.xobjects).map(([k, v]) => `/${k} ${v} 0 R`).join(' ')} >>` : ''}${p.resExtra || ''} >> /Contents ${4 + 2 * i} 0 R ${p.extra || ''} >>`);
     objs.set(4 + 2 * i, { dict: '', data: Buffer.from(content, 'latin1') });
   });
   for (const [k, v] of Object.entries(extraObjs)) objs.set(+k, v);
@@ -196,3 +196,59 @@ export async function imageInfo(doc) {
 
 /** Файл для setInputFiles из тестового PDF (или своих байтов). */
 export const pdfInput = (name, bytes = fx(name.replace(/\.pdf$/, '')), mimeType = 'application/pdf') => ({ name: name.endsWith('.pdf') ? name : name + '.pdf', mimeType, buffer: Buffer.from(bytes) });
+
+/**
+ * PDF 1.5 со сжатой таблицей и потоком объектов (страница и дерево страниц лежат в потоке).
+ * variant: 'ok' | 'crlf' (в данные потока попал перевод строки) | 'adler' (неверная контрольная сумма) |
+ * 'raw' (без заголовка zlib).
+ */
+export function objStmPdf(variant = 'ok', mark = 'OBJ-P1') {
+  const members = [
+    [2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>'],
+    [3, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>'],
+  ];
+  let head = '', body = '';
+  for (const [n, v] of members) { head += `${n} ${body.length} `; body += v + '\n'; }
+  const plain = Buffer.from(head + body, 'latin1');
+  let data;
+  if (variant === 'raw') data = zlib.deflateRawSync(plain);
+  else {
+    data = zlib.deflateSync(plain);
+    if (variant === 'adler') data = Buffer.concat([data.subarray(0, -4), Buffer.alloc(4)]);
+    if (variant === 'crlf') data = Buffer.concat([data, Buffer.from('\r\n')]);
+  }
+  const content = Buffer.from(`BT /F1 20 Tf 20 100 Td (${mark}) Tj ET`);
+  const parts = [Buffer.from('%PDF-1.5\n%\xe2\xe3\xcf\xd3\n', 'latin1')];
+  const off = {};
+  let pos = parts[0].length;
+  const add = (n, buf) => { off[n] = pos; parts.push(buf); pos += buf.length; };
+  add(1, Buffer.from('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'));
+  add(4, Buffer.concat([Buffer.from(`4 0 obj\n<< /Length ${content.length} >>\nstream\n`), content, Buffer.from('\nendstream\nendobj\n')]));
+  add(5, Buffer.concat([Buffer.from(`5 0 obj\n<< /Type /ObjStm /N 2 /First ${head.length} /Filter /FlateDecode /Length ${data.length} >>\nstream\n`), data, Buffer.from('\nendstream\nendobj\n')]));
+  const rows = [];
+  const row = (t, a, b) => rows.push(Buffer.from([t, a >> 8, a & 255, b]));
+  row(0, 0, 255); row(1, off[1], 0); row(2, 5, 0); row(2, 5, 1); row(1, off[4], 0); row(1, off[5], 0);
+  off[6] = pos; row(1, pos, 0);
+  const xs = zlib.deflateSync(Buffer.concat(rows));
+  add(6, Buffer.concat([Buffer.from(`6 0 obj\n<< /Type /XRef /Size 7 /W [1 2 1] /Root 1 0 R /Filter /FlateDecode /Length ${xs.length} >>\nstream\n`), xs, Buffer.from('\nendstream\nendobj\n')]));
+  parts.push(Buffer.from(`startxref\n${off[6]}\n%%EOF\n`));
+  return new Uint8Array(Buffer.concat(parts));
+}
+
+/** Меняет смещения в классической таблице xref: fn(номер, смещение) → новое смещение. Длина файла не меняется. */
+export function patchXref(bytes, fn) {
+  const s = latin1(bytes);
+  const x = s.lastIndexOf('xref\n0 ');
+  const m = /xref\n0 (\d+)\n/.exec(s.slice(x));
+  const n = +m[1];
+  const out = Buffer.from(bytes);
+  let p = x + m[0].length;
+  for (let i = 0; i < n; i++, p += 20) {
+    if (s[p + 17] !== 'n') continue;
+    out.write(String(fn(i, +s.slice(p, p + 10))).padStart(10, '0'), p, 'latin1');
+  }
+  return new Uint8Array(out);
+}
+
+/** Смещение объекта «N 0 obj» в файле. */
+export const offsetOf = (bytes, num) => latin1(bytes).indexOf(`\n${num} 0 obj`) + 1;

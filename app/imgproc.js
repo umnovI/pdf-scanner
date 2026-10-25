@@ -192,30 +192,39 @@ function filter1d(src, w, h, r, fn, horizontal) {
 }
 
 
-// Растяжка контраста. Общие границы для всех каналов — цвет бумаги
-// (жёлтая грамота, голубой бланк) не превращается в белый.
+// Растяжка контраста с осторожным балансом белого.
+// Если канал лишь немного «не дотягивает» (жёлтый свет лампы на белом листе),
+// он выравнивается. Если сильно (жёлтая грамота, голубой бланк) — это цвет
+// бумаги, и он сохраняется.
 function autoLevels(d) {
   const n = d.length / 4;
   const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
   for (let i = 0; i < d.length; i += 4) {
     hist[0][d[i]]++; hist[1][d[i + 1]]++; hist[2][d[i + 2]]++;
   }
-  let lo = 255, hi = 0;
+  const los = [], his = [];
   for (const hs of hist) {
     let l = 0, h = 255, acc = 0;
     while (l < 255 && (acc += hs[l]) < n * 0.01) l++;
     acc = 0;
     while (h > 0 && (acc += hs[h]) < n * 0.005) h--;
-    lo = Math.min(lo, l);
-    hi = Math.max(hi, h);
+    los.push(l);
+    his.push(h);
   }
-  if (hi - lo < 48) return;
-  const lut = new Uint8ClampedArray(256);
-  for (let v = 0; v < 256; v++) lut[v] = ((v - lo) * 255) / (hi - lo);
+  const lo = Math.min(...los), hiMax = Math.max(...his);
+  if (hiMax - lo < 48) return;
+  const luts = his.map(hc => {
+    const ratio = hc / hiMax;
+    const k = Math.min(1, Math.max(0, (ratio - 0.55) / (0.7 - 0.55)));
+    const hi = Math.max(lo + 48, hiMax + (hc - hiMax) * k);
+    const lut = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v++) lut[v] = ((v - lo) * 255) / (hi - lo);
+    return lut;
+  });
   for (let i = 0; i < d.length; i += 4) {
-    d[i] = lut[d[i]];
-    d[i + 1] = lut[d[i + 1]];
-    d[i + 2] = lut[d[i + 2]];
+    d[i] = luts[0][d[i]];
+    d[i + 1] = luts[1][d[i + 1]];
+    d[i + 2] = luts[2][d[i + 2]];
   }
 }
 
@@ -418,13 +427,17 @@ function otsu(values) {
   return thr;
 }
 
-// Из маски «лист / не лист» берёт самое крупное пятно (с приоритетом центра)
-// и находит его 4 угла. Возвращает { quad, score } или null.
+// Из маски «лист / не лист» берёт самое крупное пятно (с приоритетом центра),
+// заливает в нём дыры (тёмные фото, крупный текст) и находит 4 угла.
+// Возвращает { quad, rect, area, center } или null:
+// rect — насколько пятно похоже на четырёхугольник (у листа близко к 1),
+// area — доля кадра, center — накрывает ли пятно центр кадра,
+// frame — доля контура на краю кадра (пятно, слившееся с фоном, «прилипает» к краю).
 function quadFromMask(mask, w, h) {
   const n = w * h;
   const label = new Int32Array(n).fill(-1);
   const stack = new Int32Array(n);
-  let bestLabel = -1, bestScore = 0, bestCount = 0, cur = 0;
+  let bestLabel = -1, bestScore = 0, bestCenter = false, cur = 0;
   for (let start = 0; start < n; start++) {
     if (!mask[start] || label[start] !== -1) continue;
     let sp = 0, count = 0, touchesCenter = false;
@@ -441,31 +454,82 @@ function quadFromMask(mask, w, h) {
       if (y < h - 1 && mask[p + w] && label[p + w] === -1) { label[p + w] = cur; stack[sp++] = p + w; }
     }
     const score = count * (touchesCenter ? 2 : 1);
-    if (score > bestScore) { bestScore = score; bestLabel = cur; bestCount = count; }
+    if (score > bestScore) { bestScore = score; bestLabel = cur; bestCenter = touchesCenter; }
     cur++;
   }
-  if (bestLabel < 0 || bestCount < n * 0.08 || bestCount > n * 0.97) return null;
+  if (bestLabel < 0) return null;
 
-  let tl, tr, br, bl;
-  let mTL = Infinity, mTR = -Infinity, mBR = -Infinity, mBL = Infinity;
-  for (let p = 0; p < n; p++) {
-    if (label[p] !== bestLabel) continue;
-    const x = p % w, y = (p / w) | 0;
-    const s1 = x + y, s2 = x - y;
-    if (s1 < mTL) { mTL = s1; tl = [x, y]; }
-    if (s1 > mBR) { mBR = s1; br = [x, y]; }
-    if (s2 > mTR) { mTR = s2; tr = [x, y]; }
-    if (s2 < mBL) { mBL = s2; bl = [x, y]; }
+  // Всё, до чего нельзя дойти от края кадра в обход пятна, — внутри листа.
+  const outside = new Uint8Array(n);
+  let sp = 0;
+  const seed = p => { if (label[p] !== bestLabel && !outside[p]) { outside[p] = 1; stack[sp++] = p; } };
+  for (let x = 0; x < w; x++) { seed(x); seed((h - 1) * w + x); }
+  for (let y = 0; y < h; y++) { seed(y * w); seed(y * w + w - 1); }
+  while (sp) {
+    const p = stack[--sp];
+    const x = p % w;
+    if (x > 0) seed(p - 1);
+    if (x < w - 1) seed(p + 1);
+    if (p >= w) seed(p - w);
+    if (p < n - w) seed(p + w);
   }
-  const quad = [tl, tr, br, bl].map(([x, y]) => [(x + 0.5) / w, (y + 0.5) / h]);
-  const qa = polygonArea(quad);
-  if (qa < 0.08) return null;
-  // Насколько пятно похоже на четырёхугольник: у листа близко к 1.
-  return { quad, score: Math.min(bestCount / n, qa) / Math.max(bestCount / n, qa) };
+  let filled = 0, onFrame = 0;
+  const edge = [];
+  for (let p = 0; p < n; p++) {
+    if (outside[p]) continue;
+    filled++;
+    const x = p % w;
+    const frame = x === 0 || x === w - 1 || p < w || p >= n - w;
+    if (frame || outside[p - 1] || outside[p + 1] || outside[p - w] || outside[p + w]) {
+      edge.push(p);
+      if (frame) onFrame++;
+    }
+  }
+  const area = filled / n;
+  if (area < 0.08 || area > 0.97) return null;
+
+  // Углы — крайние точки контура по диагональным направлениям. Перебираем
+  // поворот направлений, чтобы находить углы и у сильно повёрнутого листа.
+  let quad = null, qa = 0;
+  for (let deg = 0; deg < 90; deg += 7.5) {
+    const t = (deg + 45) * Math.PI / 180, c = Math.cos(t), sn = Math.sin(t);
+    let maxU = -Infinity, minU = Infinity, maxV = -Infinity, minV = Infinity;
+    let pMaxU = 0, pMinU = 0, pMaxV = 0, pMinV = 0;
+    for (const p of edge) {
+      const x = p % w, y = (p / w) | 0;
+      const u = x * c + y * sn, v = y * c - x * sn;
+      if (u > maxU) { maxU = u; pMaxU = p; }
+      if (u < minU) { minU = u; pMinU = p; }
+      if (v > maxV) { maxV = v; pMaxV = p; }
+      if (v < minV) { minV = v; pMinV = p; }
+    }
+    const pts = [pMinU, pMaxV, pMaxU, pMinV].map(p => [((p % w) + 0.5) / w, (((p / w) | 0) + 0.5) / h]);
+    const ordered = orderCorners(pts);
+    const a = polygonArea(ordered);
+    if (a > qa) { qa = a; quad = ordered; }
+  }
+  if (!quad || qa < 0.08) return null;
+  return {
+    quad,
+    rect: Math.min(area, qa) / Math.max(area, qa),
+    area,
+    center: bestCenter,
+    frame: onFrame / edge.length, // доля контура, лежащая на краю кадра
+  };
 }
 
-// Ищет лист на фоне двумя способами — по яркости и по отличию цвета от фона
-// (для жёлтых грамот, цветных бланков и т.п.) — и берёт лучший результат.
+// Упорядочивает 4 точки как TL, TR, BR, BL (по часовой стрелке на экране).
+function orderCorners(pts) {
+  const cx = pts.reduce((s, p) => s + p[0], 0) / 4;
+  const cy = pts.reduce((s, p) => s + p[1], 0) / 4;
+  const sorted = [...pts].sort((a, b) => Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx));
+  let start = 0;
+  sorted.forEach((p, i) => { if (p[0] + p[1] < sorted[start][0] + sorted[start][1]) start = i; });
+  return [0, 1, 2, 3].map(i => sorted[(start + i) % 4]);
+}
+
+// Ищет лист на фоне тремя способами — по яркости, по отличию цвета от фона и по
+// оттенку (для жёлтых грамот, цветных бланков и т.п.) — и берёт лучший результат.
 // Возвращает углы (TL, TR, BR, BL) в долях от размера или null.
 export function detectDocument(canvas) {
   const small = drawScaled(canvas, 320);
@@ -532,8 +596,16 @@ export function detectDocument(canvas) {
     found.push(quadFromMask(m3, w, h));
   }
 
-  const best = found.filter(Boolean).sort((a, b) => b.score - a.score)[0];
-  return best && best.score > 0.8 ? best.quad : null;
+  // Важна и форма, и размер: цветная шапка или таблица внутри листа тоже
+  // бывает ровным прямоугольником, но она меньше самого листа. Пятна,
+  // слившиеся с фоном у края кадра, штрафуются.
+  const weight = f => f.rect ** 4 * Math.sqrt(f.area) * (f.center ? 1 : 0.6) *
+    Math.max(0.1, 1 - 2 * f.frame);
+  const ok = found.filter(f => f && f.rect >= 0.6).sort((a, b) => weight(b) - weight(a));
+  if (!ok.length) return null;
+  // Почти равные варианты: берём больший — меньший обычно «откусил» край листа в тени.
+  const close = ok.filter(f => weight(f) >= weight(ok[0]) * 0.85);
+  return close.sort((a, b) => b.area - a.area)[0].quad;
 }
 
 function polygonArea(q) {

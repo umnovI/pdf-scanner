@@ -3,7 +3,7 @@
 //   APP_COMMIT=<коммит> node --test --test-name-pattern='регрессия N' tests/unit/regression.test.mjs
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { cornerError, fixtureB64, inApp, launch, parsePdf, startServer, truth, unitPage } from '../helpers.mjs';
+import { PDF_SHAPES, buildPdfBytes, cornerError, fixtureB64, inApp, launch, paperColor, parsePdf, startServer, truth, unitPage } from '../helpers.mjs';
 
 let server, browser;
 before(async () => { server = await startServer(); browser = await launch(); });
@@ -22,28 +22,17 @@ test('регрессия 5: лист, повёрнутый на 45°, наход
 
 test('регрессия 6: «Улучшить» не отбеливает жёлтую грамоту (ошибка в f441384, исправлена в 7fd69fe)', async () => {
   const { page } = await unitPage(browser, server);
-  const [r, g, b] = await inApp(page, async ({ img, util }, b64) => {
-    const base = await util.loadCanvas(b64);
-    const c = img.makeCanvas(base.width, base.height);
-    c.getContext('2d').drawImage(base, 0, 0);
-    img.applyFilter(c, 'enhance');
-    const d = c.getContext('2d').getImageData(300, 400, 300, 300).data;
-    let s = [0, 0, 0];
-    for (let i = 0; i < d.length; i += 4) { s[0] += d[i]; s[1] += d[i + 1]; s[2] += d[i + 2]; }
-    return s.map(v => v / (d.length / 4));
-  }, fixtureB64('yellow.jpg'));
+  const [r, g, b] = await paperColor(page, 'yellow.jpg', 'enhance');
   assert.ok(b < r - 60 && b < g - 60, `жёлтая бумага побелела: ${[r, g, b].map(Math.round)}`);
 });
 
 test('регрессия 7: страницы PDF одного размера для вертикального и горизонтального фото (ошибка в 2f15e33, исправлена в f441384)', async () => {
   const { page } = await unitPage(browser, server);
-  const b64 = await inApp(page, async ({ pdf, util }) => {
-    const jpegs = [await util.mkJpeg(300, 400), await util.mkJpeg(400, 300), await util.mkJpeg(50, 600)];
-    return util.b64(await pdf.buildPdf(jpegs, { size: 'a4', fit: 'fit' }));
-  });
-  const parsed = parsePdf(Buffer.from(b64, 'base64'));
+  // вертикальное, горизонтальное, узкое и другие — те же формы, что в pdf.test.mjs
+  const buf = await buildPdfBytes(page, Object.values(PDF_SHAPES), { size: 'a4', fit: 'fit' });
+  const parsed = parsePdf(buf);
   assert.deepEqual(parsed.errors, []);
-  assert.equal(parsed.pages.length, 3);
+  assert.equal(parsed.pages.length, Object.keys(PDF_SHAPES).length);
   const boxes = new Set(parsed.pages.map(p => p.join(' ')));
   assert.equal(boxes.size, 1, `страницы разного размера: ${[...boxes].join(' | ')}`);
 });

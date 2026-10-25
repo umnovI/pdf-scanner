@@ -11,17 +11,25 @@ before(async () => { browser = await launch(); });
 after(async () => { await browser?.close(); });
 
 /** Каждый тест — свой сервер (публикация версий меняет файлы) и свой «телефон». */
-async function scenario(fn, build = 'aaa1111') {
+async function scenario(fn, build = 'aaa1111', appOpts = {}) {
   const server = await startServer({ build });
+  let app;
   try {
-    const app = await openApp(browser, server);
+    app = await openApp(browser, server, appOpts);
     const dialogs = [];
     app.page.on('dialog', d => { dialogs.push(d.message()); d.dismiss(); });
     await fn({ server, dialogs, ...app });
   } finally {
+    await app?.ctx.close().catch(() => {});
     await server.close();
   }
 }
+
+/** Ждёт, пока воркер версии v закончил установку: кэш pdf-scanner-<v> есть и в нём все файлы приложения. */
+const waitCacheFilled = (page, v, files = 12) => page.waitForFunction(async ([name, n]) => {
+  if (!(await caches.has(name))) return false;
+  return (await (await caches.open(name)).keys()).length >= n;
+}, [`pdf-scanner-${v}`, files]);
 
 /** Выкладывает новую версию и заставляет браузер её заметить. */
 async function releaseNew(server, page, v = 'bbb2222') {
@@ -78,26 +86,6 @@ describe('плашка «Обновить»', () => {
     await page.waitForSelector('#update', { state: 'visible' });
   }));
 
-  test('плашка не закрывает кнопки редактора «Отмена» и «Готово»', () => scenario(async ({ server, page }) => {
-    await addFromGallery(page, ['white.jpg']);
-    await swReady(page);
-    await page.reload(); // обычный запуск: вкладка сразу под управлением воркера
-    await waitPages(page, 1);
-    await swReady(page);
-    await releaseNew(server, page);
-    await page.waitForSelector('#update', { state: 'visible' });
-    await openEditor(page, 1);
-    for (const sel of ['#ed-cancel', '#ed-done']) {
-      const hit = await page.evaluate(s => {
-        const r = document.querySelector(s).getBoundingClientRect();
-        return !!document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest(s);
-      }, sel);
-      assert.ok(hit, `${sel} перекрыта`);
-    }
-    await page.click('#ed-cancel'); // обычное нажатие должно сработать
-    await page.waitForSelector('#editor[hidden]', { state: 'attached' });
-  }));
-
   test('«Обновить»: загружается новая версия, страницы на месте', () => scenario(async ({ server, page, dialogs, errors }) => {
     await addSigs(page, [0, 1, 2]);
     await swReady(page);
@@ -114,19 +102,8 @@ describe('плашка «Обновить»', () => {
     assert.deepEqual(errors, []);
   }));
 
-  test('нет ложной плашки, если страница уже загружена в новой версии', () => scenario(async ({ server, page }) => {
-    await swReady(page);
-    server.publish('bbb2222');                 // новая версия выложена, воркер ещё не обновился
-    await page.reload();                       // старый воркер отдаёт страницу уже новой версии
-    await page.waitForFunction(() => document.getElementById('version').textContent === 'Версия: bbb2222');
-    // браузер замечает новый воркер (проверка при запуске/возврате в приложение) и заменяет старый
-    await page.evaluate(() => { window.oldController = navigator.serviceWorker.controller; });
-    await checkUpdate(page);
-    await page.waitForFunction(() => navigator.serviceWorker.controller !== window.oldController);
-    await swBarrier(page);
-    assert.equal(await bannerVisible(page), false, 'страница и так новая — плашка не нужна');
-    assert.equal(await page.evaluate(() => document.getElementById('update').hidden), true);
-  }));
+  // «нет ложной плашки, если страница уже в новой версии» (регрессия 3) и «плашка не закрывает кнопки редактора»
+  // (регрессия 4) — в regression.test.mjs.
 
   test('следующая версия снова вызывает плашку (aaa → bbb → ccc)', () => scenario(async ({ server, page }) => {
     await swReady(page);
@@ -144,8 +121,7 @@ describe('офлайн', () => {
   test('без сети приложение открывается со своими страницами и собирает PDF', () => scenario(async ({ ctx, page }) => {
     await addSigs(page, [0, 1]);
     await swReady(page);
-    // дожидаемся, пока воркер точно закрыл установку (кэш заполнен)
-    await page.evaluate(async () => { const keys = await caches.keys(); const c = await caches.open(keys[0]); return (await c.keys()).length; });
+    await waitCacheFilled(page, 'aaa1111'); // воркер закончил установку: кэш заполнен
     await ctx.setOffline(true);
     // проверка, что сеть действительно отключена и для воркера: незакэшированный адрес недоступен
     const reachable = await page.evaluate(() => fetch('/нет-такого-файла-' + Date.now()).then(() => true, () => false));
@@ -158,11 +134,14 @@ describe('офлайн', () => {
     const { buf } = await makePdf(page);
     assert.ok(buf.length > 1000);
     await ctx.setOffline(false);
+  }, 'aaa1111', {
+    // ожидаемая ошибка консоли: намеренный запрос несуществующего адреса без сети
+    allowErrors: [/^Failed to load resource: net::ERR_FAILED$/],
   }));
 
   test('офлайн: камера и редактор работают', () => scenario(async ({ ctx, page }) => {
     await swReady(page);
-    await page.evaluate(async () => { const keys = await caches.keys(); return (await (await caches.open(keys[0])).keys()).length; });
+    await waitCacheFilled(page, 'aaa1111');
     await ctx.setOffline(true);
     await page.reload();
     await page.waitForSelector('#btn-camera');

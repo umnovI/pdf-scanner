@@ -6,6 +6,7 @@
 (в пикселях, порядок TL, TR, BR, BL).
 """
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -16,11 +17,15 @@ W, H = 1000, 1250  # размер кадра
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 
+if not Path(FONT).is_file():
+    # Без этого шрифта подписи на фото получились бы другими (а кириллица — «квадратиками»).
+    raise SystemExit(f"Не найден шрифт DejaVu Sans: {FONT}\n"
+                     "Установите его (Debian/Ubuntu: apt install fonts-dejavu-core) и запустите скрипт снова.")
+
+
+@lru_cache(maxsize=None)
 def font(size):
-    try:
-        return ImageFont.truetype(FONT, size)
-    except OSError:
-        return ImageFont.load_default()
+    return ImageFont.truetype(FONT, size)
 
 
 def coeffs(dst, src):

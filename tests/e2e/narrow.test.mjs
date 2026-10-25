@@ -1,7 +1,7 @@
 // Узкий экран (320 px): нет горизонтальной прокрутки, подписи кнопок не обрезаны.
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { addFromCamera, addFromGallery, addSigs, editorDone, launch, openApp, openEditor, startServer } from '../helpers.mjs';
+import { addFromCamera, addFromGallery, addSigs, editorDone, isClickable, launch, openApp, openEditor, startServer } from '../helpers.mjs';
 
 let server, browser;
 before(async () => { server = await startServer(); browser = await launch(); });
@@ -77,12 +77,7 @@ describe('экран 320 px', () => {
     const { page } = await openApp(browser, server, { device: DEVICE });
     await addFromCamera(page, 'white.jpg');
     for (const id of ['#ed-cancel', '#ed-done', '#ed-retake', '#ed-delete']) {
-      const hit = await page.evaluate(sel => {
-        const b = document.querySelector(sel).getBoundingClientRect();
-        const el = document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
-        return !!el?.closest(sel);
-      }, id);
-      assert.ok(hit, `${id} перекрыта другим элементом`);
+      assert.ok(await isClickable(page, id), `${id} перекрыта другим элементом`);
     }
   });
 

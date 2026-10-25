@@ -150,17 +150,23 @@ function lum(r, g, b) {
 // Оценка яркости «бумаги» в каждой точке (для удаления теней).
 function background(canvas) {
   const w = canvas.width, h = canvas.height;
-  const small = drawScaled(canvas, 160);
+  const small = drawScaled(canvas, 320);
   const sw = small.width, sh = small.height;
   const sctx = ctx2d(small);
   const sdata = sctx.getImageData(0, 0, sw, sh);
   const s = sdata.data;
   let g = new Float32Array(sw * sh);
   for (let i = 0; i < g.length; i++) g[i] = lum(s[i * 4], s[i * 4 + 1], s[i * 4 + 2]);
-  // Максимум по окну убирает текст, усреднение сглаживает.
-  g = filter1d(g, sw, sh, 3, Math.max, true);
-  g = filter1d(g, sw, sh, 3, Math.max, false);
-  g = blur(g, sw, sh, 4);
+  // Морфологическое закрытие: максимум по окну убирает тонкий тёмный текст,
+  // затем минимум с тем же окном возвращает крупным тёмным областям (тени)
+  // их границы — иначе светлая бумага «затекает» в тень и у её края остаётся
+  // тёмная полоса. Небольшое размытие сглаживает.
+  const r = Math.max(2, Math.round(Math.max(sw, sh) / 64));
+  g = filter1d(g, sw, sh, r, Math.max, true);
+  g = filter1d(g, sw, sh, r, Math.max, false);
+  g = filter1d(g, sw, sh, r, Math.min, true);
+  g = filter1d(g, sw, sh, r, Math.min, false);
+  g = blur(g, sw, sh, 1);
   for (let i = 0; i < g.length; i++) {
     const v = g[i];
     s[i * 4] = s[i * 4 + 1] = s[i * 4 + 2] = v;
@@ -175,11 +181,13 @@ function background(canvas) {
   return bctx.getImageData(0, 0, w, h).data;
 }
 
+// Максимум или минимум (fn = Math.max / Math.min) по окну радиуса r вдоль строк или столбцов.
 function filter1d(src, w, h, r, fn, horizontal) {
   const out = new Float32Array(src.length);
+  const start = fn === Math.min ? Infinity : -Infinity;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
-      let m = -Infinity;
+      let m = start;
       for (let k = -r; k <= r; k++) {
         const xx = horizontal ? Math.min(w - 1, Math.max(0, x + k)) : x;
         const yy = horizontal ? y : Math.min(h - 1, Math.max(0, y + k));

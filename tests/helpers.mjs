@@ -58,7 +58,9 @@ export async function startServer({ build } = {}) {
   };
 }
 
-export const launch = () => chromium.launch();
+// UTF-8 — как на телефоне; иначе Chromium в контейнере без локали теряет
+// кириллицу в именах скачиваемых файлов.
+export const launch = () => chromium.launch({ env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' } });
 
 /** Новый «телефон» (Pixel 7) со сбором ошибок страницы и консоли. */
 export async function phone(browser, device = 'Pixel 7') {

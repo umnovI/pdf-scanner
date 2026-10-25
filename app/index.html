@@ -16,7 +16,11 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>Сканер PDF</h1>
+    <button id="btn-projects" class="project-btn" aria-label="Проекты">
+      <span aria-hidden="true">📁</span>
+      <span id="project-name" class="project-name">Сканер PDF</span>
+      <span aria-hidden="true" class="caret">▾</span>
+    </button>
     <button id="btn-clear" class="icon-btn" title="Удалить все страницы" hidden>Очистить</button>
   </header>
 
@@ -124,12 +128,25 @@
     </div>
   </div>
 
+  <!-- Окно «Проекты» -->
+  <div id="projects" class="sheet-backdrop" hidden>
+    <div class="sheet" role="dialog" aria-labelledby="projects-title">
+      <h2 id="projects-title">Проекты</h2>
+      <button id="project-new" class="action primary wide">＋ Новый проект</button>
+      <p class="hint">Новый проект начинается пустым, прошлые остаются здесь — их можно открыть и продолжить. Фото не копируются.</p>
+      <ul id="project-list" class="project-list"></ul>
+      <div class="sheet-actions">
+        <button id="projects-close" class="text-btn">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
   <div id="busy" class="busy" hidden>
     <div class="spinner"></div>
     <p id="busy-text">Обработка…</p>
   </div>
   <div id="toast" class="toast" hidden></div>
-  <!-- #update должен идти после #editor, #sheet и #busy: на этом держится правило в style.css -->
+  <!-- #update должен идти после #editor, #sheet, #projects и #busy: на этом держится правило в style.css -->
   <div id="update" class="update" hidden>
     <span>Вышла новая версия</span>
     <button id="update-btn">Обновить</button>

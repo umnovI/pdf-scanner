@@ -16,7 +16,7 @@ test('снимок камерой, фото из галереи и PDF из дв
   assert.equal(await pageCount(page), 2);
 
   const { buf, filename } = await makePdf(page);
-  assert.match(filename, /\.pdf$/);
+  assert.equal(filename, 'Проект 1.pdf'); // кириллица в имени не теряется
   const pdf = parsePdf(buf);
   assert.deepEqual(pdf.errors, []);
   assert.equal(pdf.count, 2);

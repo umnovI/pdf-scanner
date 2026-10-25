@@ -249,7 +249,7 @@ main {
   color: #fff;
   font-weight: 600;
 }
-.tools { display: flex; justify-content: space-around; padding: 0 4px; }
+.tools { display: flex; justify-content: space-around; padding: 0 2px; }
 .tool {
   background: none;
   border: none;
@@ -260,7 +260,7 @@ main {
   align-items: center;
   gap: 2px;
   padding: 4px 6px;
-  min-width: 56px;
+  min-width: 50px;
 }
 .tool small { font-size: 11px; color: #aaa; }
 .tool.danger { color: #ff7b72; }
@@ -335,4 +335,20 @@ main {
   border-radius: 10px;
   box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
   font-size: 15px;
+}
+
+/* ---------- Узкие экраны ---------- */
+.action { white-space: nowrap; }
+.tool { flex: 1 1 0; min-width: 0; white-space: nowrap; }
+.tool small { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+@media (max-width: 380px) {
+  main { padding: 12px 12px 20px; }
+  .pages { grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 10px; }
+  .bottombar { gap: 6px; padding-left: 8px; padding-right: 8px; }
+  .action { font-size: 15px; padding: 0 6px; gap: 4px; }
+  .tool { font-size: 20px; padding: 4px 2px; }
+  .tool small { font-size: 10px; }
+}
+@media (max-width: 340px) {
+  .tool small { font-size: 9.5px; letter-spacing: -0.2px; }
 }

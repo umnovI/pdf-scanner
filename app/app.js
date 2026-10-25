@@ -119,9 +119,10 @@ async function processPage(p) {
   setThumb(p);
 }
 
-async function addFiles(files, { fromCamera = false } = {}) {
+async function addFiles(files, { fromCamera = false, replace = null } = {}) {
   files = [...files].filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name));
   if (!files.length) return;
+  if (replace && state.pages.includes(replace)) return retake(replace, files[0]);
   const added = [];
   const filter = settings.get('filter', 'enhance');
   for (let i = 0; i < files.length; i++) {
@@ -156,6 +157,40 @@ async function addFiles(files, { fromCamera = false } = {}) {
   renderList();
   if (fromCamera && added.length === 1) openEditor(added[0], { isNew: true });
   else if (added.length > 1) toast(`Добавлено страниц: ${added.length}`);
+}
+
+// Заменяет фото страницы новым снимком; номер страницы и фильтр сохраняются.
+async function retake(p, file) {
+  busy('Обработка…');
+  await frame();
+  const old = { src: p.src, rotation: p.rotation, corners: p.corners };
+  try {
+    const bitmap = await img.decode(file);
+    const c = img.drawScaled(bitmap, img.MAX_SRC);
+    img.release(bitmap);
+    p.src = await img.toBlob(c, 0.92);
+    p.rotation = 0;
+    p.corners = img.detectDocument(c) || img.FULL_FRAME.map(pt => [...pt]);
+    await processPage(p);
+    await persist(p);
+  } catch (e) {
+    console.error(e);
+    Object.assign(p, old);
+    busy(null);
+    toast('Не удалось открыть новое фото');
+    return;
+  }
+  busy(null);
+  renderList();
+  openEditor(p, { isNew: true });
+}
+
+// Какую страницу переснимаем (null — обычная съёмка новой страницы).
+let retakeTarget = null;
+
+function openCamera(target = null) {
+  retakeTarget = target;
+  $('in-camera').click();
 }
 
 // ---------- Редактор ----------
@@ -355,7 +390,7 @@ async function editorDone({ another = false } = {}) {
     return;
   }
   // Камеру нужно открыть сразу по нажатию, иначе браузер её заблокирует.
-  if (another) $('in-camera').click();
+  if (another) openCamera();
   const changed = p.rotation !== ed.rotation || p.filter !== ed.filter ||
     JSON.stringify(p.corners) !== JSON.stringify(ed.corners);
   closeEditor();
@@ -381,6 +416,11 @@ function setupEditor() {
   setupHandles();
   $('ed-cancel').onclick = closeEditor;
   $('ed-done').onclick = () => editorDone();
+  $('ed-retake').onclick = () => {
+    const p = ed.page;
+    openCamera(p); // открываем камеру сразу по нажатию, иначе браузер заблокирует
+    closeEditor();
+  };
   $('ed-more').onclick = () => editorDone({ another: true });
   $('ed-rotl').onclick = () => {
     ed.rotation = (ed.rotation + 270) % 360;
@@ -540,9 +580,15 @@ async function restore() {
 }
 
 function setup() {
-  $('btn-camera').onclick = () => $('in-camera').click();
+  $('btn-camera').onclick = () => openCamera();
   $('btn-gallery').onclick = () => $('in-gallery').click();
-  $('in-camera').onchange = e => { addFiles(e.target.files, { fromCamera: true }); e.target.value = ''; };
+  $('in-camera').onchange = e => {
+    const replace = retakeTarget;
+    retakeTarget = null;
+    addFiles(e.target.files, { fromCamera: true, replace });
+    e.target.value = '';
+  };
+  $('in-camera').addEventListener('cancel', () => { retakeTarget = null; });
   $('in-gallery').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
   $('btn-pdf').onclick = openSheet;
   $('btn-clear').onclick = async () => {

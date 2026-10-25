@@ -17,6 +17,8 @@ const state = {
   writes: new Set(),   // незавершённые записи в IndexedDB
   unsaved: new Set(),  // id страниц, последнее сохранение которых не удалось
   dbFailed: false,     // не удалось удаление/порядок — после перезагрузки всё вернётся
+  newVersion: false,   // загружена новая версия приложения
+  dbClosed: false,     // база закрыта другой вкладкой — сохранять больше нельзя
   pdf: null,          // готовый PDF { blob, name }
 };
 
@@ -615,15 +617,13 @@ function setupUpdates() {
   if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
   const sw = navigator.serviceWorker;
   sw.addEventListener('message', e => {
-    if (e.data?.type === 'pdf-scanner-version') $('update').hidden = e.data.version === BUILD;
+    if (e.data?.type === 'pdf-scanner-version') {
+      state.newVersion = e.data.version !== BUILD;
+      showUpdateBanner();
+    }
   });
   sw.startMessages(); // включаем доставку явно: addEventListener сам её не включает
-  // Другая вкладка обновила приложение и формат базы — здесь сохранять уже нельзя.
-  // (Дальнейшие записи будут неудачными и попадут в учёт несохранённых.)
-  self.addEventListener('pdf-scanner-db-closed', () => {
-    $('update').hidden = false;
-    toast('Приложение обновилось в другой вкладке — нажмите «Обновить»', 6000);
-  });
+
   // Вкладка вернулась из кэша браузера и могла пропустить рассылку — спрашиваем сами.
   window.addEventListener('pageshow', e => {
     if (e.persisted) sw.controller?.postMessage({ type: 'pdf-scanner-version' });
@@ -639,36 +639,42 @@ function setupUpdates() {
     document.addEventListener('visibilitychange', check);
     setInterval(check, 60 * 60 * 1000);
   }).catch(console.warn);
+}
 
-  let updating = false;
-  $('update-btn').onclick = async () => {
-    if (updating) return;
-    updating = true;
-    try {
-      // Дожидаемся записи страниц в память браузера, иначе они пропадут.
-      while (state.writes.size) await Promise.all([...state.writes]);
-      // Пока ждали, могли открыть редактор, окно PDF или начать обработку.
-      if (!$('editor').hidden || !$('sheet').hidden || !$('busy').hidden) {
-        toast('Обновление отложено — закройте окно и нажмите «Обновить» ещё раз');
-        return;
-      }
-      const lost = !state.persist ? state.pages.length : state.pages.filter(p => state.unsaved.has(p.id)).length;
-      let question = '';
-      if (lost) question = `Страниц, не сохранённых в браузере: ${lost}. После обновления они пропадут.`;
-      else if (state.dbFailed) question = 'Часть изменений (удаление или порядок страниц) не сохранилась и после обновления отменится.';
-      if (question && !confirm(question + ' Обновить?')) return;
-      location.reload();
-    } finally {
-      updating = false;
+// «Обновить»: перезагрузка, когда это безопасно для несохранённой работы.
+let updating = false;
+async function reloadForUpdate() {
+  if (updating) return;
+  updating = true;
+  try {
+    // Дожидаемся записи страниц в память браузера, иначе они пропадут.
+    while (state.writes.size) await Promise.all([...state.writes]);
+    // Пока ждали, могли открыть редактор, окно PDF или начать обработку.
+    if (!$('editor').hidden || !$('sheet').hidden || !$('busy').hidden) {
+      toast('Обновление отложено — закройте окно и нажмите «Обновить» ещё раз');
+      return;
     }
-  };
+    const lost = !state.persist ? state.pages.length : state.pages.filter(p => state.unsaved.has(p.id)).length;
+    let question = '';
+    if (lost) question = `Страниц, не сохранённых в браузере: ${lost}. После обновления они пропадут.`;
+    else if (state.dbFailed) question = 'Часть изменений (удаление или порядок страниц) не сохранилась и после обновления отменится.';
+    if (question && !confirm(question + ' Обновить?')) return;
+    location.reload();
+  } finally {
+    updating = false;
+  }
+}
+
+// Плашка нужна, если вышла новая версия или база закрыта другой вкладкой.
+function showUpdateBanner() {
+  $('update').hidden = !(state.newVersion || state.dbClosed);
 }
 
 // ---------- Запуск ----------
 
 async function restore() {
   try {
-    const saved = await db.loadAll(track);
+    const saved = await db.loadAll(p => track(p).then(ok => { if (!ok) state.dbFailed = true; }));
     state.pages = saved.filter(p => p.src && p.out && p.thumb);
     state.pages.forEach(setThumb);
   } catch (e) {
@@ -722,6 +728,14 @@ function setup() {
     if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files);
   });
 
+  // Другая вкладка обновила приложение и формат базы — здесь сохранять уже нельзя
+  // (дальнейшие записи будут неудачными и попадут в учёт несохранённых).
+  self.addEventListener('pdf-scanner-db-closed', () => {
+    state.dbClosed = true;
+    showUpdateBanner();
+    toast('Приложение обновилось в другой вкладке — нажмите «Обновить»', 6000);
+  });
+  $('update-btn').onclick = reloadForUpdate;
   setupUpdates();
   $('version').textContent = 'Версия: ' + (BUILD.startsWith('__') ? 'dev' : BUILD);
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});

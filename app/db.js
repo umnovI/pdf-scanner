@@ -17,6 +17,8 @@ function open() {
       let blocked = false;
       const req = indexedDB.open(DB_NAME, 2);
       req.onupgradeneeded = () => {
+        // Уже отказались из-за блокировки — не обновляем базу, которой не пользуемся.
+        if (blocked) { req.transaction.abort(); return; }
         const db = req.result;
         if (!db.objectStoreNames.contains(PAGES)) db.createObjectStore(PAGES, { keyPath: 'id' });
         if (!db.objectStoreNames.contains(META)) db.createObjectStore(META, { keyPath: 'key' });
@@ -30,7 +32,7 @@ function open() {
         // и сообщаем приложению: дальше сохранять нельзя, нужна перезагрузка.
         db.onversionchange = () => {
           db.close();
-          dbPromise = Promise.reject(Object.assign(new Error('База обновлена другой вкладкой'), { closed: true }));
+          dbPromise = Promise.reject(new Error('База обновлена другой вкладкой'));
           dbPromise.catch(() => {});
           self.dispatchEvent(new Event('pdf-scanner-db-closed'));
         };
@@ -58,7 +60,7 @@ async function tx(mode, fn) {
     try {
       fn(t.objectStore(PAGES), t.objectStore(META));
     } catch (e) {
-      t.abort(); // не оставляем половину записи
+      try { t.abort(); } catch { /* транзакция уже завершена */ } // не оставляем половину записи
       reject(e);
     }
   });
@@ -69,7 +71,7 @@ const putOrder = (meta, ids) => meta.put({ key: 'order', ids });
 // Страницы в сохранённом порядке. Читаем без записи, а перенос данных старой
 // версии и чистку лишних записей делаем отдельной записью — её сбой не мешает
 // загрузке. Эту запись передаём в onWrite, чтобы её можно было дождаться.
-export async function loadAll(onWrite = () => {}) {
+export async function loadAll(onWrite = p => p.catch(console.warn)) {
   let list = [], ids;
   await tx('readonly', (pages, meta) => {
     const all = pages.getAll();

@@ -210,10 +210,8 @@ async function inflatePartial(fmt, d) {
     } catch { /* остаток не распаковался */ }
   })();
   try {
-    for (let i = 0; i < d.length; i += 4096) {
-      await writer.write(d.subarray(i, Math.min(d.length, i + 4096)));
-      await new Promise(r => setTimeout(r, 0)); // даём прочитать распакованное
-    }
+    // Частями: распакованное успевает уйти к читателю до ошибки в хвосте.
+    for (let i = 0; i < d.length; i += 65536) await writer.write(d.subarray(i, Math.min(d.length, i + 65536)));
     await writer.close();
   } catch { /* ошибка в данных — берём прочитанное */ }
   await reading;
@@ -243,7 +241,7 @@ async function inflate(data) {
     if (d.length < 1) continue;
     try { return await inflateWith(fmt, d); } catch { /* следующий способ */ }
   }
-  for (const [fmt, d] of [['deflate', data], ['deflate-raw', data]]) {
+  for (const [fmt, d] of [['deflate', data], ['deflate-raw', data.subarray(2)], ['deflate-raw', data]]) {
     try { return await inflatePartial(fmt, d); } catch { /* следующий способ */ }
   }
   throw new PdfError('Не удалось распаковать данные PDF');
@@ -376,7 +374,8 @@ export class PdfDoc {
       await doc.readXrefChain();
       if (!isDict(await doc.get(doc.trailer.get('Root')))) throw new Error('нет каталога');
       doc.pageRefs = await doc.collectPages();
-      healthy = doc.pageRefs.length > 0 && doc.pageRefs.length === doc.declaredCount;
+      // Ссылка на страницу ведёт в пустоту или на чужой объект — таблица врёт.
+      healthy = doc.pageRefs.length > 0 && !doc.missingPages;
     } catch (e) {
       if (e instanceof PdfError && /зашифр/.test(e.message)) throw e;
     }
@@ -387,7 +386,7 @@ export class PdfDoc {
       try {
         await rebuilt.rebuildXref();
         rebuilt.pageRefs = await rebuilt.collectPages();
-        if (!doc.pageRefs || rebuilt.pageRefs.length > doc.pageRefs.length || rebuilt.trailer.has('Encrypt')) doc = rebuilt;
+        if (!doc.pageRefs || rebuilt.pageRefs.length > doc.pageRefs.length) doc = rebuilt;
       } catch (e) {
         if (!doc.pageRefs?.length || (e instanceof PdfError && /зашифр/.test(e.message))) throw e;
       }
@@ -508,7 +507,8 @@ export class PdfDoc {
       }
       if (obj instanceof Stream && isName(obj.dict.get('Type'), 'XRef') && obj.dict.has('Root') && e.offset > xrefStmAt) {
         xrefStmAt = e.offset;
-        for (const [k, v] of obj.dict) if (['Root', 'Info', 'Encrypt'].includes(k)) this.trailer.set(k, v);
+        this.trailer = new Map();
+        for (const k of ['Root', 'Info', 'Encrypt']) if (obj.dict.has(k)) this.trailer.set(k, obj.dict.get(k));
       }
     }
     let t = text.lastIndexOf('trailer');
@@ -613,41 +613,57 @@ export class PdfDoc {
   }
 
   /**
-   * Именованные назначения ссылок (каталог /Dests и дерево /Names /Dests):
-   * имя → явное назначение [страница /XYZ …].
+   * Явное назначение ([страница /XYZ …]) по имени ссылки: /Dest /имя ищется в
+   * каталоге /Dests, /Dest (строка) — в дереве /Names /Dests. null — не найдено.
    */
-  async namedDests() {
-    if (this.dests) return this.dests;
-    const out = new Map();
-    const explicit = async v => {
-      v = await this.get(v);
-      if (isDict(v)) v = await this.get(v.get('D'));
-      return Array.isArray(v) ? v : null;
+  async namedDest(v) {
+    v = await this.get(v);
+    const key = v instanceof Name ? 'n:' + v.n : v instanceof Str ? 's:' + latin1(v.bytes) : null;
+    if (!key) return null;
+    this.destCache ??= new Map();
+    if (this.destCache.has(key)) return this.destCache.get(key);
+    let found = null;
+    const explicit = async x => {
+      x = await this.get(x);
+      if (isDict(x)) x = await this.get(x.get('D'));
+      return Array.isArray(x) ? x : null;
     };
     try {
       const root = await this.get(this.trailer.get('Root'));
-      const old = isDict(root) ? await this.get(root.get('Dests')) : null;
-      if (isDict(old)) for (const [k, v] of old) { const d = await explicit(v); if (d) out.set(k, d); }
-      const names = isDict(root) ? await this.get(root.get('Names')) : null;
-      const seen = new Set();
-      const walk = async (node, depth) => {
-        node = await this.get(node);
-        if (!isDict(node) || depth > 32 || seen.has(node)) return;
-        seen.add(node);
-        const arr = await this.get(node.get('Names'));
-        if (Array.isArray(arr)) {
-          for (let i = 0; i + 1 < arr.length; i += 2) {
-            const k = await this.get(arr[i]);
-            const d = await explicit(arr[i + 1]);
-            if (k instanceof Str && d && !out.has(latin1(k.bytes))) out.set(latin1(k.bytes), d);
+      if (v instanceof Name) {
+        const dests = isDict(root) ? await this.get(root.get('Dests')) : null;
+        if (isDict(dests) && dests.has(v.n)) found = await explicit(dests.get(v.n));
+      } else {
+        const names = isDict(root) ? await this.get(root.get('Names')) : null;
+        const want = latin1(v.bytes);
+        // Поиск по дереву имён: спускаемся только в узлы, чьи /Limits включают имя.
+        const seen = new Set();
+        const search = async (node, depth) => {
+          node = await this.get(node);
+          if (!isDict(node) || depth > 32 || seen.has(node)) return null;
+          seen.add(node);
+          const lim = await this.get(node.get('Limits'));
+          if (Array.isArray(lim) && lim[0] instanceof Str && lim[1] instanceof Str) {
+            if (want < latin1(lim[0].bytes) || want > latin1(lim[1].bytes)) return null;
           }
-        }
-        for (const kid of asArray(await this.get(node.get('Kids')))) await walk(kid, depth + 1);
-      };
-      if (isDict(names)) await walk(names.get('Dests'), 0);
-    } catch { /* без именованных ссылок */ }
-    this.dests = out;
-    return out;
+          const arr = await this.get(node.get('Names'));
+          if (Array.isArray(arr)) {
+            for (let i = 0; i + 1 < arr.length; i += 2) {
+              const k = await this.get(arr[i]);
+              if (k instanceof Str && latin1(k.bytes) === want) return explicit(arr[i + 1]);
+            }
+          }
+          for (const kid of asArray(await this.get(node.get('Kids')))) {
+            const r = await search(kid, depth + 1);
+            if (r) return r;
+          }
+          return null;
+        };
+        if (isDict(names)) found = await search(names.get('Dests'), 0);
+      }
+    } catch { found = null; }
+    this.destCache.set(key, found);
+    return found;
   }
 
   // Страницы по порядку: [{ ref, dict, inherited }], наследуемые атрибуты собраны.
@@ -658,7 +674,7 @@ export class PdfDoc {
     const walk = async (ref, inh, depth) => {
       if (depth > 64) return;
       const node = await this.get(ref);
-      if (!isDict(node)) return;
+      if (!isDict(node)) { this.missingPages++; return; }
       if (ref instanceof Ref) {
         if (seen.has(ref.num)) return;
         seen.add(ref.num);
@@ -672,11 +688,8 @@ export class PdfDoc {
         out.push({ ref, dict: node, inherited: next });
       }
     };
-    if (isDict(root)) {
-      const top = await this.get(root.get('Pages'));
-      this.declaredCount = isDict(top) ? await this.get(top.get('Count')) : undefined;
-      await walk(root.get('Pages'), {}, 0);
-    }
+    this.missingPages = 0;
+    if (isDict(root)) await walk(root.get('Pages'), {}, 0);
     return out;
   }
 }

@@ -853,10 +853,8 @@ async function makeCompress() {
     } else if (r.blob.size < r.original) {
       out.textContent = `Уложиться в ${formatSize(target)} не получилось: меньше ${formatSize(r.blob.size)} не сжать (${sizes}). ` +
         'Обычно мешают шрифты и текст — их сжать нельзя.';
-    } else if (r.images) {
-      out.textContent = `Сжать не получилось: картинки в файле уже сжаты сильнее, чем можем мы (${formatSize(r.original)}).`;
     } else {
-      out.textContent = `Сжать не получилось: в файле нет картинок, которые можно уменьшить (${formatSize(r.original)}).`;
+      out.textContent = `Сжать не получилось: картинки в файле уже сжаты сильнее, чем можем мы (${formatSize(r.original)}).`;
     }
     out.hidden = false;
     if (r.blob.size < r.original) {

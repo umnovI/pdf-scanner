@@ -109,6 +109,11 @@ export class Writer {
 // Строка PDF в UTF-16 (для названия документа).
 export const textStr = s => new Str(utf16be(s));
 
+// Где в словаре именованная ссылка: /Dest у аннотации или /D у действия GoTo.
+const destKey = v => (v.has('Dest') ? 'Dest' : isName(v.get('S'), 'GoTo') ? 'D' : null);
+// Имя (/a) и строка ((a)) — разные пространства имён.
+const nameKey = x => (x instanceof Name ? 'n:' + x.n : x instanceof Str ? 's:' + latin1(x.bytes) : null);
+
 // Ключи страницы, которые не переносятся: дерево страниц строится заново,
 // статьи (/B) и структура документа остаются в исходном файле.
 const PAGE_DROP = new Set(['Parent', 'B', 'StructParents', 'PieceInfo']);
@@ -121,8 +126,7 @@ const INHERITED = ['Resources', 'MediaBox', 'CropBox', 'Rotate'];
  */
 async function copyPages(writer, docs, parentRef, onProgress) {
   const pages = [];
-  const dests = [];
-  for (const doc of docs) dests.push(await doc.namedDests());
+  const dests = docs.map(() => new Map()); // по источнику: ключ имени → явное назначение
   const map = new Map(); // `${номер источника}:${num}` → новый номер
   const queue = [];
   // Ключ — номер источника по порядку, а не документ: один и тот же документ,
@@ -151,9 +155,8 @@ async function copyPages(writer, docs, parentRef, onProgress) {
       for (const [k, x] of v) d.set(k, remap(src, doc, x, depth + 1));
       // Именованные ссылки (/Dest (имя), /GoTo /D (имя)) — в явные: каталог с
       // именами в результат не копируется, а при объединении имена могли бы совпасть.
-      const named = x => (x instanceof Name ? x.n : x instanceof Str ? latin1(x.bytes) : null);
-      const key = v.has('Dest') ? 'Dest' : isName(v.get('S'), 'GoTo') ? 'D' : null;
-      const target = key && dests[src].get(named(v.get(key)));
+      const key = destKey(v);
+      const target = key && dests[src].get(nameKey(v.get(key)));
       if (target) d.set(key, remap(src, doc, target, depth + 1));
       return d;
     }
@@ -168,8 +171,26 @@ async function copyPages(writer, docs, parentRef, onProgress) {
       else writer.set(n, remap(src, doc, v));
     }
   };
+  // Именованные ссылки страницы ищем заранее (поиск асинхронный, а копирование — нет).
+  const prepareDests = async (src, doc, dict) => {
+    for (const a of [].concat((await doc.get(dict.get('Annots'))) ?? [])) {
+      const annot = await doc.get(a);
+      if (!isDict(annot)) continue;
+      for (const holder of [annot, await doc.get(annot.get('A'))]) {
+        if (!isDict(holder)) continue;
+        const key = destKey(holder);
+        const val = key && await doc.get(holder.get(key));
+        const k = nameKey(val);
+        if (k && !dests[src].has(k)) {
+          const target = await doc.namedDest(val);
+          if (target) dests[src].set(k, target);
+        }
+      }
+    }
+  };
   for (let i = 0; i < pages.length; i++) {
     const { src, doc, page, n } = pages[i];
+    await prepareDests(src, doc, page.dict);
     const d = new Map();
     for (const [k, x] of page.dict) if (!PAGE_DROP.has(k)) d.set(k, x);
     for (const k of INHERITED) if (!d.has(k) && page.inherited[k] !== undefined) d.set(k, page.inherited[k]);
@@ -183,6 +204,8 @@ async function copyPages(writer, docs, parentRef, onProgress) {
   }
   // Слои (/OCProperties): без них скрытые по умолчанию слои (например,
   // водяной знак только для печати) стали бы видны. Слои всех файлов объединяются.
+  // Состояние слоёв каждого файла переводим в общее: всё включено, кроме
+  // выключенных (с учётом /BaseState /OFF файла); /AS (печать/экран) складываются.
   let oc = null;
   for (let src = 0; src < docs.length; src++) {
     const root = await docs[src].get(docs[src].trailer.get('Root'));
@@ -191,20 +214,26 @@ async function copyPages(writer, docs, parentRef, onProgress) {
     const copy = remap(src, docs[src], props);
     await drain();
     const res = x => (x instanceof Ref ? writer.objs[x.num] : x);
+    const list = x => { const r = res(x); return Array.isArray(r) ? r : []; };
     const d = res(copy.get('D'));
-    if (!oc) {
-      oc = { OCGs: [], D: isDict(d) ? new Map(d) : new Map() };
-      for (const k of ['ON', 'OFF', 'Order', 'RBGroups', 'Locked']) oc.D.delete(k);
-    }
-    oc.OCGs.push(...[].concat(res(copy.get('OCGs')) ?? []));
-    if (isDict(d)) {
-      for (const k of ['ON', 'OFF', 'Order', 'RBGroups', 'Locked']) {
-        const list = res(d.get(k));
-        if (Array.isArray(list)) oc.D.set(k, [...(oc.D.get(k) || []), ...list]);
-      }
-    }
+    const ocgs = list(copy.get('OCGs'));
+    oc ??= { OCGs: [], ON: [], OFF: [], Order: [], RBGroups: [], Locked: [], AS: [], D: isDict(d) ? d : new Map() };
+    oc.OCGs.push(...ocgs);
+    if (!isDict(d)) continue;
+    const same = (a, b) => a instanceof Ref && b instanceof Ref ? a.num === b.num : a === b;
+    if (isName(res(d.get('BaseState')), 'OFF')) {
+      const on = list(d.get('ON'));
+      oc.OFF.push(...ocgs.filter(g => !on.some(x => same(x, g))));
+    } else oc.OFF.push(...list(d.get('OFF')));
+    for (const k of ['ON', 'Order', 'RBGroups', 'Locked', 'AS']) oc[k].push(...list(d.get(k)));
   }
-  const ocProperties = oc ? new Map([['OCGs', oc.OCGs], ['D', oc.D]]) : null;
+  let ocProperties = null;
+  if (oc) {
+    const D = new Map();
+    for (const k of ['Name', 'Creator', 'Intent', 'ListMode']) if (oc.D.has(k)) D.set(k, oc.D.get(k));
+    for (const k of ['ON', 'OFF', 'Order', 'RBGroups', 'Locked', 'AS']) if (oc[k].length) D.set(k, oc[k]);
+    ocProperties = new Map([['OCGs', oc.OCGs], ['D', D]]);
+  }
   return { kids: pages.map(p => new Ref(p.n, 0)), ocProperties };
 }
 

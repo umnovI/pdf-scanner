@@ -150,20 +150,25 @@ function lum(r, g, b) {
 // Оценка яркости «бумаги» в каждой точке (для удаления теней).
 function background(canvas) {
   const w = canvas.width, h = canvas.height;
-  const small = drawScaled(canvas, 160);
+  const small = drawScaled(canvas, 320);
   const sw = small.width, sh = small.height;
   const sctx = ctx2d(small);
   const sdata = sctx.getImageData(0, 0, sw, sh);
   const s = sdata.data;
   let g = new Float32Array(sw * sh);
   for (let i = 0; i < g.length; i++) g[i] = lum(s[i * 4], s[i * 4 + 1], s[i * 4 + 2]);
-  // Максимум по окну убирает текст, усреднение сглаживает.
-  g = filter1d(g, sw, sh, 3, Math.max, true);
-  g = filter1d(g, sw, sh, 3, Math.max, false);
-  for (let pass = 0; pass < 2; pass++) {
-    g = boxBlur(g, sw, sh, 4, true);
-    g = boxBlur(g, sw, sh, 4, false);
-  }
+  // Морфологическое закрытие (максимум, затем минимум с тем же окном):
+  // тёмное содержимое меньше окна — текст, заголовки, плашки таблиц, фото —
+  // убирается из оценки фона и остаётся на странице; тени шире окна
+  // возвращаются в фон с чёткими границами (без тёмной полосы у края тени);
+  // плавные перепады освещения закрытие сохраняет как есть.
+  // Окно — около 20% длинной стороны: компромисс между ними.
+  const r = Math.max(2, Math.round(Math.max(sw, sh) * 0.1));
+  g = minMax1d(g, sw, sh, r, true, true);
+  g = minMax1d(g, sw, sh, r, true, false);
+  g = minMax1d(g, sw, sh, r, false, true);
+  g = minMax1d(g, sw, sh, r, false, false);
+  g = blur(g, sw, sh, 1);
   for (let i = 0; i < g.length; i++) {
     const v = g[i];
     s[i * 4] = s[i * 4 + 1] = s[i * 4 + 2] = v;
@@ -178,37 +183,31 @@ function background(canvas) {
   return bctx.getImageData(0, 0, w, h).data;
 }
 
-function filter1d(src, w, h, r, fn, horizontal) {
+// Максимум (isMax) или минимум по окну радиуса r вдоль строк или столбцов.
+// Монотонная очередь: O(n) при любом r. Края — повтором крайнего пикселя.
+function minMax1d(src, w, h, r, isMax, horizontal) {
   const out = new Float32Array(src.length);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let m = -Infinity;
-      for (let k = -r; k <= r; k++) {
-        const xx = horizontal ? Math.min(w - 1, Math.max(0, x + k)) : x;
-        const yy = horizontal ? y : Math.min(h - 1, Math.max(0, y + k));
-        m = fn(m, src[yy * w + xx]);
-      }
-      out[y * w + x] = m;
+  const len = horizontal ? w : h, lines = horizontal ? h : w;
+  const step = horizontal ? 1 : w;
+  const q = new Int32Array(len + 2 * r + 1); // индексы в линии (с учётом выхода за края)
+  const better = isMax ? (a, b) => a >= b : (a, b) => a <= b;
+  for (let l = 0; l < lines; l++) {
+    const base = horizontal ? l * w : l;
+    const at = k => src[base + Math.min(len - 1, Math.max(0, k)) * step];
+    let head = 0, tail = 0;
+    for (let k = -r; k < len + r; k++) {
+      const v = at(k);
+      while (tail > head && better(v, at(q[tail - 1]))) tail--;
+      q[tail++] = k;
+      const c = k - r; // центр окна [c - r, c + r]
+      if (c < 0) continue;
+      while (q[head] < c - r) head++;
+      out[base + c * step] = at(q[head]);
     }
   }
   return out;
 }
 
-function boxBlur(src, w, h, r, horizontal) {
-  const out = new Float32Array(src.length);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let sum = 0;
-      for (let k = -r; k <= r; k++) {
-        const xx = horizontal ? Math.min(w - 1, Math.max(0, x + k)) : x;
-        const yy = horizontal ? y : Math.min(h - 1, Math.max(0, y + k));
-        sum += src[yy * w + xx];
-      }
-      out[y * w + x] = sum / (2 * r + 1);
-    }
-  }
-  return out;
-}
 
 // Растяжка контраста с осторожным балансом белого.
 // Если канал лишь немного «не дотягивает» (жёлтый свет лампы на белом листе),
@@ -248,8 +247,129 @@ function autoLevels(d) {
 
 export const FILTERS = ['original', 'enhance', 'color', 'gray', 'doc', 'bw'];
 
+// ---------- Чёткость текста ----------
+// Как в камерах телефонов: «нерезкая маска» по яркости (без цветных ореолов)
+// с порогом, чтобы не усиливать шум на бумаге, плюс слабый локальный контраст
+// на крупном масштабе. Радиусы — от размера снимка (≈ для страницы A4).
+
+// Размытие прямоугольным окном радиуса r по строкам и столбцам (бегущая сумма,
+// O(n)). Пишет в dst (можно dst === src); tmp — рабочий буфер того же размера.
+function boxBlurInto(src, dst, tmp, w, h, r) {
+  const norm = 1 / (2 * r + 1);
+  for (let y = 0; y < h; y++) {
+    const o = y * w;
+    let acc = src[o] * (r + 1);
+    for (let x = 1; x <= r; x++) acc += src[o + Math.min(x, w - 1)];
+    for (let x = 0; x < w; x++) {
+      tmp[o + x] = acc * norm;
+      acc += src[o + Math.min(x + r + 1, w - 1)] - src[o + Math.max(x - r, 0)];
+    }
+  }
+  // По столбцам — но обходом строк (суммы всех столбцов сразу): так память
+  // читается подряд, и это в разы быстрее обхода по столбцам.
+  const acc = new Float32Array(w);
+  for (let x = 0; x < w; x++) acc[x] = tmp[x] * (r + 1);
+  for (let y = 1; y <= r; y++) {
+    const o = Math.min(y, h - 1) * w;
+    for (let x = 0; x < w; x++) acc[x] += tmp[o + x];
+  }
+  for (let y = 0; y < h; y++) {
+    const o = y * w, add = Math.min(y + r + 1, h - 1) * w, sub = Math.max(y - r, 0) * w;
+    for (let x = 0; x < w; x++) {
+      dst[o + x] = acc[x] * norm;
+      acc[x] += tmp[add + x] - tmp[sub + x];
+    }
+  }
+  return dst;
+}
+
+// Почти гауссово размытие (два прохода прямоугольным окном) в новый массив.
+function blur(src, w, h, r, tmp = new Float32Array(src.length)) {
+  const out = boxBlurInto(src, new Float32Array(src.length), tmp, w, h, r);
+  return boxBlurInto(out, out, tmp, w, h, r);
+}
+
+// Уменьшенная в k раз и размытая копия яркости — для локального контраста.
+function wideSmall(L, w, h, r, k) {
+  const sw = Math.max(1, Math.ceil(w / k)), sh = Math.max(1, Math.ceil(h / k));
+  const small = new Float32Array(sw * sh);
+  for (let y = 0; y < h; y++) {
+    const row = ((y / k) | 0) * sw;
+    for (let x = 0; x < w; x++) small[row + ((x / k) | 0)] += L[y * w + x];
+  }
+  // Число пикселей в ячейке: k×k, у последних строки/столбца — меньше.
+  for (let cy = 0; cy < sh; cy++) {
+    const ch = Math.min(k, h - cy * k);
+    for (let cx = 0; cx < sw; cx++) small[cy * sw + cx] /= ch * Math.min(k, w - cx * k);
+  }
+  return { b: blur(small, sw, sh, Math.max(1, Math.round(r / k))), sw, sh };
+}
+
+// Уровень шума снимка: медиана |L − размытое| (большая часть кадра — ровная
+// бумага, поэтому медиана — это шум, а не края букв). Возвращает σ.
+function noiseSigma(L, fine) {
+  const hist = new Uint32Array(256);
+  let n = 0;
+  for (let i = 0; i < L.length; i += 7) {
+    hist[Math.min(255, Math.round(Math.abs(L[i] - fine[i]) * 4))]++;
+    n++;
+  }
+  let acc = 0, m = 0;
+  while (m < 255 && (acc += hist[m]) < n / 2) m++;
+  return 1.4826 * (m / 4);
+}
+
+/**
+ * Повышает чёткость. L — яркость (Float32Array, 0..255), w×h. Изменение яркости
+ * добавляется в target: при stride 4 — к R, G, B картинки RGBA (не больше, чем
+ * позволяет самый светлый/тёмный канал, чтобы не сдвигать цвет на краях), при
+ * stride 1 — к самому массиву яркости (можно target === L).
+ * Память: кроме L — два буфера того же размера.
+ */
+function sharpenLuma(L, w, h, target, stride) {
+  const scale = Math.max(w, h) / 2480;               // 1 ≈ A4 при 300 dpi
+  const rFine = Math.max(1, Math.round(1.5 * scale)); // штрих буквы — несколько пикселей
+  const fine = blur(L, w, h, rFine);
+  const k = Math.max(2, Math.round(6 * scale));
+  const { b, sw, sh } = wideSmall(L, w, h, Math.max(4, 24 * scale), k);
+  // Порог по шуму: зерно матрицы не усиливается, края букв — да.
+  const t = Math.max(2, 3 * noiseSigma(L, fine));
+  const AMOUNT = 1.2, CLARITY = 0.25;
+  // Мягкий порог: плавно от нуля, без скачков яркости на плавных переходах.
+  const core = v => (v > t ? v - t : v < -t ? v + t : 0);
+  // Билинейная выборка из уменьшенной копии: индексы по x общие для всех строк.
+  const X0 = new Int32Array(w), X1 = new Int32Array(w), TX = new Float32Array(w);
+  for (let x = 0; x < w; x++) {
+    const fx = Math.min(sw - 1, Math.max(0, (x + 0.5) / k - 0.5));
+    X0[x] = fx | 0; X1[x] = Math.min(X0[x] + 1, sw - 1); TX[x] = fx - X0[x];
+  }
+  for (let y = 0; y < h; y++) {
+    const fy = Math.min(sh - 1, Math.max(0, (y + 0.5) / k - 0.5));
+    const r0 = (fy | 0) * sw, r1 = Math.min((fy | 0) + 1, sh - 1) * sw, ty = fy - (fy | 0);
+    for (let x = 0, i = y * w; x < w; x++, i++) {
+      const top = b[r0 + X0[x]] + (b[r0 + X1[x]] - b[r0 + X0[x]]) * TX[x];
+      const wide = top + (b[r1 + X0[x]] + (b[r1 + X1[x]] - b[r1 + X0[x]]) * TX[x] - top) * ty;
+      let delta = AMOUNT * core(L[i] - fine[i]) + CLARITY * core(L[i] - wide);
+      if (!delta) continue;
+      if (stride === 1) { target[i] += delta; continue; }
+      const j = i * 4, r = target[j], g = target[j + 1], bl = target[j + 2];
+      if (delta > 0) delta = Math.min(delta, 255 - Math.max(r, g, bl));
+      else delta = Math.max(delta, -Math.min(r, g, bl));
+      target[j] = r + delta; target[j + 1] = g + delta; target[j + 2] = bl + delta;
+    }
+  }
+}
+
+function lumaOf(d) {
+  const L = new Float32Array(d.length / 4);
+  for (let i = 0, j = 0; i < L.length; i++, j += 4) L[i] = lum(d[j], d[j + 1], d[j + 2]);
+  return L;
+}
+
+
 // Применяет фильтр к холсту на месте.
-export function applyFilter(canvas, filter) {
+// sharpen: false — без повышения чёткости (для сравнения в тестах).
+export function applyFilter(canvas, filter, { sharpen = true } = {}) {
   if (!filter || filter === 'original') return canvas;
   const ctx = ctx2d(canvas);
   const w = canvas.width, h = canvas.height;
@@ -278,8 +398,14 @@ export function applyFilter(canvas, filter) {
   } else if (filter === 'doc' || filter === 'bw') {
     const bg = background(canvas);
     const bw = filter === 'bw';
+    // Яркость относительно бумаги (тени убраны), 255 = бумага.
+    const N = lumaOf(d);
+    for (let i = 0; i < N.length; i++) N[i] = (N[i] / Math.max(bg[i * 4], 8)) * 255;
+    // Чёткость — после удаления теней (края теней не усиливаются) и до перевода
+    // в чёрно-белое (тонкие штрихи не рассыпаются).
+    if (sharpen) sharpenLuma(N, w, h, N, 1);
     for (let i = 0; i < d.length; i += 4) {
-      const r = lum(d[i], d[i + 1], d[i + 2]) / Math.max(bg[i], 8);
+      const r = N[i / 4] / 255;
       let v;
       if (bw) {
         v = r < 0.78 ? 0 : 255;
@@ -290,6 +416,8 @@ export function applyFilter(canvas, filter) {
       d[i] = d[i + 1] = d[i + 2] = v;
     }
   }
+  // Для цветных и серого — после выравнивания яркости и цвета.
+  if (sharpen && (filter === 'enhance' || filter === 'color' || filter === 'gray')) sharpenLuma(lumaOf(d), w, h, d, 4);
   ctx.putImageData(id, 0, 0);
   return canvas;
 }
@@ -428,7 +556,7 @@ export function detectDocument(canvas) {
   const ch = [0, 1, 2].map(c => {
     let a = new Float32Array(n);
     for (let i = 0; i < n; i++) a[i] = s[i * 4 + c];
-    return boxBlur(boxBlur(a, w, h, 2, true), w, h, 2, false);
+    return boxBlurInto(a, a, new Float32Array(a.length), w, h, 2);
   });
   const L = new Float32Array(n);
   for (let i = 0; i < n; i++) L[i] = lum(ch[0][i], ch[1][i], ch[2][i]);

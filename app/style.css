@@ -342,16 +342,20 @@ main {
 
 /* ---------- Узкие экраны ---------- */
 .action { white-space: nowrap; }
+/* Кнопки нижней панели делят ширину и могут сжиматься: с крупным системным
+   шрифтом их подписи иначе не помещались в 320 px (прокрутка вбок). */
+.bottombar .action { flex: 1 1 auto; min-width: 0; }
 .tool { flex: 1 1 0; min-width: 0; white-space: nowrap; }
 .tool small { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 @media (max-width: 380px) {
   main { padding: 12px 12px 20px; }
   .pages { grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 10px; }
   .bottombar { gap: 6px; padding-left: 8px; padding-right: 8px; }
-  .action { font-size: 15px; padding: 0 6px; gap: 4px; }
+  .action { font-size: 14px; padding: 0 6px; gap: 4px; }
   .tool small { font-size: 10px; }
 }
 @media (max-width: 340px) {
+  .tool { padding: 4px 0; } /* каждый пиксель ширины — подписям (крупный системный шрифт) */
   .tool small { font-size: 9.5px; letter-spacing: -0.2px; }
 }
 

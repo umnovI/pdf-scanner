@@ -1,0 +1,12 @@
+{
+  "name": "pdf-scanner",
+  "private": true,
+  "type": "module",
+  "description": "Сканер PDF — тесты",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 'tests/**/*.test.mjs'"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

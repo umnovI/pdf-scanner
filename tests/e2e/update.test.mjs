@@ -22,6 +22,9 @@ async function scenario(fn, { build = 'aaa1111', ...appOpts } = {}) {
     app.page.on('dialog', d => { dialogs.push(d.message()); d.dismiss(); });
     await fn({ server, dialogs, ...app });
   } finally {
+    // Сначала браузер, потом сервер: иначе открытая вкладка и воркер успевают
+    // получить «connection refused», и afterEach засчитает это как ошибку.
+    for (const c of browser.contexts()) await c.close().catch(() => {});
     await server.close();
   }
 }

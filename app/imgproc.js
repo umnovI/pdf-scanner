@@ -157,15 +157,17 @@ function background(canvas) {
   const s = sdata.data;
   let g = new Float32Array(sw * sh);
   for (let i = 0; i < g.length; i++) g[i] = lum(s[i * 4], s[i * 4 + 1], s[i * 4 + 2]);
-  // Морфологическое закрытие: максимум по окну убирает тонкий тёмный текст,
-  // затем минимум с тем же окном возвращает крупным тёмным областям (тени)
-  // их границы — иначе светлая бумага «затекает» в тень и у её края остаётся
-  // тёмная полоса. Небольшое размытие сглаживает.
-  const r = Math.max(2, Math.round(Math.max(sw, sh) / 64));
-  g = filter1d(g, sw, sh, r, Math.max, true);
-  g = filter1d(g, sw, sh, r, Math.max, false);
-  g = filter1d(g, sw, sh, r, Math.min, true);
-  g = filter1d(g, sw, sh, r, Math.min, false);
+  // Морфологическое закрытие (максимум, затем минимум с тем же окном):
+  // тёмное содержимое меньше окна — текст, заголовки, плашки таблиц, фото —
+  // убирается из оценки фона и остаётся на странице; тени шире окна
+  // возвращаются в фон с чёткими границами (без тёмной полосы у края тени);
+  // плавные перепады освещения закрытие сохраняет как есть.
+  // Окно — около 20% длинной стороны: компромисс между ними.
+  const r = Math.max(2, Math.round(Math.max(sw, sh) * 0.1));
+  g = minMax1d(g, sw, sh, r, true, true);
+  g = minMax1d(g, sw, sh, r, true, false);
+  g = minMax1d(g, sw, sh, r, false, true);
+  g = minMax1d(g, sw, sh, r, false, false);
   g = blur(g, sw, sh, 1);
   for (let i = 0; i < g.length; i++) {
     const v = g[i];
@@ -181,19 +183,26 @@ function background(canvas) {
   return bctx.getImageData(0, 0, w, h).data;
 }
 
-// Максимум или минимум (fn = Math.max / Math.min) по окну радиуса r вдоль строк или столбцов.
-function filter1d(src, w, h, r, fn, horizontal) {
+// Максимум (isMax) или минимум по окну радиуса r вдоль строк или столбцов.
+// Монотонная очередь: O(n) при любом r. Края — повтором крайнего пикселя.
+function minMax1d(src, w, h, r, isMax, horizontal) {
   const out = new Float32Array(src.length);
-  const start = fn === Math.min ? Infinity : -Infinity;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let m = start;
-      for (let k = -r; k <= r; k++) {
-        const xx = horizontal ? Math.min(w - 1, Math.max(0, x + k)) : x;
-        const yy = horizontal ? y : Math.min(h - 1, Math.max(0, y + k));
-        m = fn(m, src[yy * w + xx]);
-      }
-      out[y * w + x] = m;
+  const len = horizontal ? w : h, lines = horizontal ? h : w;
+  const step = horizontal ? 1 : w;
+  const q = new Int32Array(len + 2 * r + 1); // индексы в линии (с учётом выхода за края)
+  const better = isMax ? (a, b) => a >= b : (a, b) => a <= b;
+  for (let l = 0; l < lines; l++) {
+    const base = horizontal ? l * w : l;
+    const at = k => src[base + Math.min(len - 1, Math.max(0, k)) * step];
+    let head = 0, tail = 0;
+    for (let k = -r; k < len + r; k++) {
+      const v = at(k);
+      while (tail > head && better(v, at(q[tail - 1]))) tail--;
+      q[tail++] = k;
+      const c = k - r; // центр окна [c - r, c + r]
+      if (c < 0) continue;
+      while (q[head] < c - r) head++;
+      out[base + c * step] = at(q[head]);
     }
   }
   return out;

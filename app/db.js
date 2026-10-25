@@ -38,7 +38,7 @@ function open() {
         };
         resolve(db);
       };
-      req.onerror = () => reject(req.error);
+      req.onerror = e => { e.preventDefault(); reject(req.error); };
       // Базу держит открытой старая версия в другой вкладке — не ждём бесконечно.
       req.onblocked = () => {
         blocked = true;

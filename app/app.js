@@ -674,7 +674,9 @@ function showUpdateBanner() {
 
 async function restore() {
   try {
-    const saved = await db.loadAll(p => track(p).then(ok => { if (!ok) state.dbFailed = true; }));
+    // Перенос старых данных и чистку отслеживаем только чтобы дождаться их перед
+    // перезагрузкой: при сбое ничего не теряется — повторятся при следующем запуске.
+    const saved = await db.loadAll(track);
     state.pages = saved.filter(p => p.src && p.out && p.thumb);
     state.pages.forEach(setThumb);
   } catch (e) {

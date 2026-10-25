@@ -1,16 +1,25 @@
 // Хранение страниц в IndexedDB, чтобы скан не пропал при перезагрузке страницы
 // (на телефонах браузер часто выгружает вкладку, пока открыта камера).
+//
+// Страницы (фото и настройки) лежат в хранилище «pages», а порядок — одним
+// списком id в «meta» под ключом «order». Так перемещение страницы не
+// переписывает фото, а добавление и удаление меняют страницу и список вместе.
 
 const DB_NAME = 'pdf-scanner';
-const STORE = 'pages';
+const PAGES = 'pages';
+const META = 'meta';
 let dbPromise = null;
 
 function open() {
   if (!dbPromise) {
     dbPromise = new Promise((resolve, reject) => {
       if (!('indexedDB' in self)) { reject(new Error('IndexedDB недоступна')); return; }
-      const req = indexedDB.open(DB_NAME, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'id' });
+      const req = indexedDB.open(DB_NAME, 2);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(PAGES)) db.createObjectStore(PAGES, { keyPath: 'id' });
+        if (!db.objectStoreNames.contains(META)) db.createObjectStore(META, { keyPath: 'key' });
+      };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
@@ -18,31 +27,58 @@ function open() {
   return dbPromise;
 }
 
+// Выполняет fn над обоими хранилищами в одной транзакции.
 async function tx(mode, fn) {
   const db = await open();
   return new Promise((resolve, reject) => {
-    const t = db.transaction(STORE, mode);
-    const store = t.objectStore(STORE);
-    let result;
-    const r = fn(store);
-    if (r) r.onsuccess = () => { result = r.result; };
+    const t = db.transaction([PAGES, META], mode);
+    const result = fn(t.objectStore(PAGES), t.objectStore(META));
     t.oncomplete = () => resolve(result);
     t.onerror = () => reject(t.error);
     t.onabort = () => reject(t.error);
   });
 }
 
+const putOrder = (meta, ids) => meta.put({ key: 'order', ids });
+
+// Страницы в сохранённом порядке.
 export async function loadAll() {
-  const all = (await tx('readonly', s => s.getAll())) || [];
-  return all.sort((a, b) => a.order - b.order);
-}
-
-export const save = page => tx('readwrite', s => s.put(page));
-export const remove = id => tx('readwrite', s => s.delete(id));
-export const clear = () => tx('readwrite', s => s.clear());
-
-export async function saveOrder(pages) {
-  await tx('readwrite', s => {
-    pages.forEach((p, i) => { p.order = i; s.put(p); });
+  const out = { pages: [] };
+  await tx('readwrite', (pages, meta) => {
+    const all = pages.getAll();
+    const order = meta.get('order');
+    // Заявки одной транзакции выполняются по очереди: к ответу на вторую
+    // первая уже готова.
+    order.onsuccess = () => {
+      const list = all.result || [];
+      let ids = order.result?.ids;
+      if (!ids) {
+        // Данные старой версии: порядок был в поле order каждой страницы.
+        list.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        ids = list.map(p => p.id);
+        putOrder(meta, ids);
+      }
+      const byId = new Map(list.map(p => [p.id, p]));
+      const keep = new Set(ids);
+      // Страница, которой нет в списке, осталась от неудавшегося удаления — убираем.
+      for (const p of list) if (!keep.has(p.id)) pages.delete(p.id);
+      out.pages = ids.map(id => byId.get(id)).filter(Boolean);
+    };
   });
+  return out.pages;
 }
+
+// Сохраняет страницу; если передан порядок — вместе с ним.
+export const save = (page, ids) => tx('readwrite', (pages, meta) => {
+  pages.put(page);
+  if (ids) putOrder(meta, ids);
+});
+
+export const saveOrder = ids => tx('readwrite', (pages, meta) => { putOrder(meta, ids); });
+
+export const remove = (id, ids) => tx('readwrite', (pages, meta) => {
+  pages.delete(id);
+  putOrder(meta, ids);
+});
+
+export const clear = () => tx('readwrite', (pages, meta) => { pages.clear(); meta.clear(); });

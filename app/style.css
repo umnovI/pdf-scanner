@@ -380,9 +380,8 @@ main {
   font-weight: 700;
 }
 /* Пока открыт редактор, окно PDF или идёт обработка, плашка не показывается —
-   там можно потерять несохранённую работу. */
-body:has(#editor:not([hidden]), #sheet:not([hidden]), #busy:not([hidden])) #update { display: none; }
-/* Для браузеров без :has() (сейчас #update идёт после этих элементов). */
+   там можно потерять несохранённую работу. #update должен идти в index.html
+   после этих элементов (без :has(), чтобы работало и в старых браузерах). */
 #editor:not([hidden]) ~ #update,
 #sheet:not([hidden]) ~ #update,
 #busy:not([hidden]) ~ #update { display: none; }

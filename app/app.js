@@ -12,7 +12,7 @@ const QUALITY = {
 };
 
 const state = {
-  pages: [],          // { id, order, src, rotation, corners, filter, out, thumb, thumbUrl }
+  pages: [],          // по порядку: { id, src, rotation, corners, filter, out, thumb, thumbUrl }
   persist: true,
   writes: new Set(),   // незавершённые записи в IndexedDB
   unsaved: new Set(),  // id страниц, последнее сохранение которых не удалось
@@ -53,8 +53,8 @@ const frame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
 function record(p) {
-  const { id, order, src, rotation, corners, filter, out, thumb } = p;
-  return { id, order, src, rotation, corners, filter, out, thumb };
+  const { id, src, rotation, corners, filter, out, thumb } = p;
+  return { id, src, rotation, corners, filter, out, thumb };
 }
 
 // Отслеживает запись в IndexedDB: перезагрузка для обновления её дождётся.
@@ -70,19 +70,22 @@ function track(promise) {
 // последней, иначе запоздавшая старая запись перебьёт итог новой.
 const writeSeq = new Map();
 
-async function persist(p) {
+const pageIds = () => state.pages.map(p => p.id);
+
+// Сохраняет страницу; withOrder — вместе с порядком (для новой страницы).
+async function persist(p, { withOrder = false } = {}) {
   if (!state.persist) return;
   const seq = (writeSeq.get(p.id) || 0) + 1;
   writeSeq.set(p.id, seq);
-  const ok = await track(db.save(record(p)));
+  const ok = await track(db.save(record(p), withOrder ? pageIds() : undefined));
   if (writeSeq.get(p.id) !== seq) return;
   if (ok) state.unsaved.delete(p.id); else state.unsaved.add(p.id);
 }
 
-// Запись, которая затрагивает не одну страницу (порядок, удаление).
-async function persistOther(promise, savedIds = []) {
-  if (await track(promise)) savedIds.forEach(id => state.unsaved.delete(id));
-  else state.dbFailed = true;
+// Запись порядка страниц (перемещение, удаление). Удачная запись заменяет
+// весь список, поэтому исправляет и последствия прошлых сбоев.
+async function persistOrder(promise) {
+  state.dbFailed = !(await track(promise));
 }
 
 function setThumb(p) {
@@ -124,9 +127,8 @@ async function move(i, dir) {
   const j = i + dir;
   if (j < 0 || j >= state.pages.length) return;
   [state.pages[i], state.pages[j]] = [state.pages[j], state.pages[i]];
-  state.pages.forEach((p, k) => { p.order = k; }); // порядок и в памяти, не только в базе
   renderList();
-  if (state.persist) persistOther(db.saveOrder(state.pages.map(record)), state.pages.map(p => p.id));
+  if (state.persist) persistOrder(db.saveOrder(pageIds()));
 }
 
 async function removePage(p) {
@@ -136,7 +138,7 @@ async function removePage(p) {
   renderList();
   writeSeq.delete(p.id);
   state.unsaved.delete(p.id);
-  if (state.persist) persistOther(db.remove(p.id));
+  if (state.persist) persistOrder(db.remove(p.id, pageIds()));
   return true;
 }
 
@@ -164,8 +166,6 @@ async function addFiles(files, { fromCamera = false, replace = null } = {}) {
       img.release(bitmap);
       const p = {
         id: uid(),
-        // после последней страницы (после удаления номера идут с пропусками)
-        order: state.pages.length ? state.pages[state.pages.length - 1].order + 1 : 0,
         src: await img.toBlob(c, 0.92),
         rotation: 0,
         corners: img.FULL_FRAME.map(pt => [...pt]),
@@ -178,7 +178,7 @@ async function addFiles(files, { fromCamera = false, replace = null } = {}) {
       await processPage(p);
       state.pages.push(p);
       added.push(p);
-      await persist(p);
+      await persist(p, { withOrder: true });
     } catch (e) {
       console.error(e);
       toast(`Не удалось открыть «${files[i].name}»`);
@@ -603,8 +603,8 @@ function downloadPdf() {
 // экране, не чаще раза в 5 минут). Новый воркер, став активным, рассылает свою
 // версию; если она отличается от версии страницы — показываем плашку «Обновить».
 // Поверх редактора, окна PDF и обработки плашка не видна (см. style.css).
-// Пока доставка не включена (startMessages), браузер придерживает сообщения
-// воркера — рассылка, пришедшая до загрузки скрипта, не потеряется.
+// Вызывается синхронно при запуске: до этого браузер придерживает сообщения
+// воркера, и рассылка, пришедшая раньше, не потеряется.
 function setupUpdates() {
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
@@ -612,7 +612,7 @@ function setupUpdates() {
   sw.addEventListener('message', e => {
     if (e.data?.type === 'version') $('update').hidden = e.data.version === BUILD;
   });
-  sw.startMessages(); // явно включаем доставку (addEventListener сам её не включает)
+  sw.startMessages(); // включаем доставку явно: addEventListener сам её не включает
   // Вкладка вернулась из кэша браузера и могла пропустить рассылку — спрашиваем сами.
   window.addEventListener('pageshow', e => {
     if (e.persisted) sw.controller?.postMessage({ type: 'version' });

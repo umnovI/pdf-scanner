@@ -150,6 +150,13 @@ def main():
     d = sheet(); text_lines(ImageDraw.Draw(d))
     save("castshadow.jpg", place(d, (150, 130, 110), q,
          extra=lambda e: e.polygon([(840, 210), (900, 240), (860, 1140), (800, 1110)], fill=(70, 60, 50))), q)
+    # Размытый снимок с шумом матрицы (для проверки чёткости текста).
+    from PIL import ImageFilter
+    d = sheet(); text_lines(ImageDraw.Draw(d), 22, 60, (35, 35, 35), 15)
+    rng = np.random.default_rng(1)
+    b = place(d, (90, 70, 55), q).filter(ImageFilter.GaussianBlur(1.4))
+    a = np.asarray(b).astype(float) + rng.normal(0, 3.0, (H, W, 1))
+    save("blurry.jpg", Image.fromarray(a.clip(0, 255).astype("uint8")), q)
 
     # Альбомное фото (без листа) — для проверки одинакового размера страниц PDF.
     Image.new("RGB", (1200, 800), (40, 120, 60)).save(OUT / "landscape.jpg", quality=85)

@@ -4,7 +4,7 @@
 // Нашлось в CI (медленная машина): терялось последнее перемещение и «Очистить».
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { addSigs, launch, pageSigs, phone, slowDbOpen, startServer } from '../helpers.mjs';
+import { addSigs, fixture, launch, pageSigs, phone, slowDbOpen, startServer, waitPages } from '../helpers.mjs';
 
 let server, browser;
 before(async () => { server = await startServer(); browser = await launch(); });
@@ -24,4 +24,16 @@ test('регрессия: фото и перемещения сразу посл
   // Загрузка точно закончилась — список не перезаписан.
   await page.waitForTimeout(2000);
   assert.deepEqual(await pageSigs(page), [1, 2, 0, 3]);
+});
+
+// Регрессия (ветка проектов): фото, выбранное до загрузки проекта, терялось с
+// TypeError в addFiles (state.project ещё не задан).
+test('регрессия: фото, выбранное до загрузки проекта, не теряется', async () => {
+  const { page, ctx } = await phone(browser);
+  await slowDbOpen(ctx, 1500); // проект грузится заметно дольше обычного
+  await page.goto(server.url);
+  // Сразу, не дожидаясь названия проекта в шапке.
+  await page.setInputFiles('#in-gallery', fixture('white.jpg'));
+  await waitPages(page, 1);
+  assert.equal(await page.textContent('#project-name'), 'Проект 1');
 });

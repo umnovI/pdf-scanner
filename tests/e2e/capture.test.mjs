@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
   activeFilter, addFromCamera, addFromGallery, addSigs, cornerError, dbRecords, editorDone, launch, openApp,
-  openEditor, pageCount, pageRatios, pick, settle, startServer, truth, waitPages,
+  openEditor, pageCount, pageRatios, pick, startServer, truth, waitPages, watchStable,
 } from '../helpers.mjs';
 
 let server, browser;
@@ -106,14 +106,13 @@ describe('камера и редактор', () => {
     const { page, errors } = await openApp(browser, server);
     await page.setInputFiles('#in-camera', []);
     await page.dispatchEvent('#in-camera', 'cancel');
-    await settle(page); // приложение успело бы открыть редактор или добавить страницу
-    assert.equal(await pageCount(page), 0);
-    assert.equal(await page.locator('#editor').isHidden(), true);
+    // ошибочная страница появилась бы после обработки (сотни мс): наблюдаем дольше неё
+    assert.deepEqual(await watchStable(page, 0), [], 'после закрытия камеры что-то изменилось');
     assert.equal(await page.locator('#empty').isVisible(), true);
     // и после этого приложение работает: следующая страница из галереи — ровно одна, лишних нет
     await addFromGallery(page, ['white.jpg']);
+    assert.deepEqual(await watchStable(page, 1, { ms: 800 }), [], 'лишняя страница появилась позже');
     assert.equal(await pageCount(page), 1);
-    assert.equal(await page.locator('#editor').isHidden(), true);
     assert.deepEqual(errors, []);
   });
 
@@ -213,7 +212,7 @@ describe('«Переснять»', () => {
     const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#ed-retake')]);
     void chooser;
     await page.dispatchEvent('#in-camera', 'cancel');
-    await settle(page);
+    assert.deepEqual(await watchStable(page, 2), [], 'после отмены камеры что-то изменилось');
     assert.equal(await pageCount(page), 2);
     assert.deepEqual(await dbRecords(page), recs);
     assert.equal(await page.textContent('#ed-title'), 'Страница 2', 'редактор остался на той же странице');

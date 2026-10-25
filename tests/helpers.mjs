@@ -39,11 +39,18 @@ export function appFromCommit(commit) {
  */
 export async function startServer({ build, appDir, commit = process.env.APP_COMMIT } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-scanner-'));
-  const old = !appDir && commit ? appFromCommit(commit) : null;
-  fs.cpSync(appDir || old?.dir || path.join(ROOT, 'app'), dir, { recursive: true });
-  // пустая страница для blankPage(): настоящий файл, а не page.route — иначе её запрос перехватит сервис-воркер приложения и получит 404
-  fs.writeFileSync(path.join(dir, '__blank.html'), '<!doctype html><title>blank</title><link rel="icon" href="data:,">');
-  old?.cleanup(); // копия уже лежит в папке сервера, распакованный коммит больше не нужен
+  let old = null;
+  try {
+    old = !appDir && commit ? appFromCommit(commit) : null;
+    fs.cpSync(appDir || old?.dir || path.join(ROOT, 'app'), dir, { recursive: true });
+    // пустая страница для blankPage(): настоящий файл, а не page.route — иначе её запрос перехватит сервис-воркер приложения и получит 404
+    fs.writeFileSync(path.join(dir, '__blank.html'), '<!doctype html><title>blank</title><link rel="icon" href="data:,">');
+  } catch (e) {
+    fs.rmSync(dir, { recursive: true, force: true }); // сервер не запустился — папка не нужна
+    throw e;
+  } finally {
+    old?.cleanup(); // копия уже лежит в папке сервера (или не понадобилась), распакованный коммит больше не нужен
+  }
   let current = '__BUILD__';
   const publish = v => {
     for (const f of ['sw.js', 'app.js']) {
@@ -83,29 +90,35 @@ export const launch = () => chromium.launch({ env: { ...process.env, LANG: 'C.UT
 // Контексты браузера, созданные в текущем тесте: после теста их закрывает afterEach ниже.
 const live = [];
 
-// Хук регистрируется при подключении помощников и действует на все тесты файла:
+// Хук действует на все тесты файла и регистрируется только под `node --test`
+// (там задана NODE_TEST_CONTEXT): при простом импорте помощников он ничего не делает.
 // 1) закрывает все контексты, созданные через phone()/openApp()/unitPage();
-// 2) падает, если в консоли или на странице были ошибки, не разрешённые явно (опция allowErrors).
-afterEach(async () => {
-  const items = live.splice(0);
-  const unexpected = [];
-  for (const { errors, allowErrors } of items) {
-    unexpected.push(...errors.filter(e => !allowErrors.some(re => re.test(e))));
-  }
-  await Promise.all(items.map(({ ctx }) => ctx.close().catch(() => {})));
-  assert.deepEqual(unexpected, [], 'необработанные ошибки страницы или консоли');
-});
+// 2) падает, если в консоли или на странице были ошибки приложения, не разрешённые явно (опция allowErrors).
+if (process.env.NODE_TEST_CONTEXT) {
+  afterEach(async () => {
+    const items = live.splice(0);
+    const unexpected = [];
+    for (const { errors, allowErrors } of items) {
+      unexpected.push(...errors.filter(e => !allowErrors.some(re => re.test(e))));
+    }
+    await Promise.all(items.map(({ ctx }) => ctx.close().catch(() => {})));
+    assert.deepEqual(unexpected, [], 'необработанные ошибки страницы или консоли');
+  });
+}
+
+/** Вкладка приложения, а не вспомогательная пустая (about:blank и __blank.html): только её ошибки считаются ошибками приложения. */
+const isAppUrl = url => !!url && url !== 'about:blank' && !url.endsWith('/__blank.html');
 
 /**
- * Новый «телефон» (Pixel 7) со сбором ошибок страницы и консоли (по всем вкладкам контекста).
+ * Новый «телефон» (Pixel 7) со сбором ошибок страницы и консоли (по всем вкладкам приложения в контексте, кроме пустых вспомогательных).
  * После теста контекст закрывается сам, а непустой errors (кроме совпавших с allowErrors — список RegExp) роняет тест.
  */
 export async function phone(browser, device = 'Pixel 7', { allowErrors = [] } = {}) {
   const ctx = await browser.newContext({ ...devices[device], acceptDownloads: true });
   const errors = [];
   const watch = pg => {
-    pg.on('pageerror', e => errors.push(e.message));
-    pg.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+    pg.on('pageerror', e => { if (isAppUrl(pg.url())) errors.push(e.message); });
+    pg.on('console', m => { if (m.type() === 'error' && isAppUrl(m.location().url || pg.url())) errors.push(m.text()); });
   };
   ctx.on('page', watch);
   live.push({ ctx, errors, allowErrors });
@@ -375,8 +388,23 @@ export const isClickable = (page, selector) => page.evaluate(sel => {
   return !!document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)?.closest(sel);
 }, selector);
 
-/** Даёт приложению обработать уже посланное событие: кадр отрисовки и короткая пауза (ждать условия здесь нечего). */
-export const settle = page => page.evaluate(() => new Promise(r => requestAnimationFrame(() => setTimeout(r, 50))));
+/**
+ * Наблюдает за страницей ms миллисекунд (по умолчанию 1,5 с — дольше обработки фото, ~300+ мс) и возвращает
+ * нарушения: число страниц отличается от pages, состояние редактора не такое, как ждали (editor: открыт или нет), или показался индикатор обработки.
+ * Нужна для проверок «ничего не произошло» (отмена, пустой выбор файла): ошибочная страница появилась бы позже короткой паузы.
+ */
+export const watchStable = (page, pages, { ms = 1500, editor = false } = {}) => page.evaluate(([n, ms, editor]) => new Promise(resolve => {
+  const bad = new Set();
+  const look = () => {
+    const count = document.querySelectorAll('.page').length;
+    if (count !== n) bad.add(`страниц ${count}, ожидалось ${n}`);
+    if (document.getElementById('editor').hidden === editor) bad.add(editor ? 'редактор закрылся' : 'открылся редактор');
+    if (!document.getElementById('busy').hidden) bad.add('показан индикатор обработки');
+  };
+  const t0 = performance.now();
+  const tick = () => { look(); if (performance.now() - t0 < ms) setTimeout(tick, 25); else resolve([...bad]); };
+  tick();
+}), [pages, ms, editor]);
 
 /** Выбранный сейчас фильтр в редакторе. */
 export const activeFilter = page => page.evaluate(() => document.querySelector('#ed-filters .chip[aria-checked="true"]')?.dataset.f);
@@ -394,6 +422,12 @@ export async function swReady(page) {
   await page.evaluate(() => navigator.serviceWorker.ready);
   await page.waitForFunction(() => !!navigator.serviceWorker.controller);
 }
+
+/** Установка закончена: нет воркера в установке и в ожидании, есть активный (для любой версии приложения). */
+export const swIdle = page => page.waitForFunction(async () => {
+  const r = await navigator.serviceWorker.getRegistration();
+  return !!r && r.installing === null && r.waiting === null && !!r.active && r.active.state === 'activated';
+});
 
 /** Просит браузер проверить обновление sw.js (как при запуске или возврате в приложение). */
 export const checkUpdate = page => page.evaluate(() => navigator.serviceWorker.getRegistration().then(r => r.update()));

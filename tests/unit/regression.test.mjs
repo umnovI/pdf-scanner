@@ -28,11 +28,11 @@ test('регрессия 6: «Улучшить» не отбеливает жё�
 
 test('регрессия 7: страницы PDF одного размера для вертикального и горизонтального фото (ошибка в 2f15e33, исправлена в f441384)', async () => {
   const { page } = await unitPage(browser, server);
-  // вертикальное, горизонтальное, узкое и другие — те же формы, что в pdf.test.mjs
-  const buf = await buildPdfBytes(page, Object.values(PDF_SHAPES), { size: 'a4', fit: 'fit' });
+  // ровно две формы: вертикальная и горизонтальная (остальные формы проверяет pdf.test.mjs)
+  const buf = await buildPdfBytes(page, [PDF_SHAPES['вертикальное'], PDF_SHAPES['горизонтальное']], { size: 'a4', fit: 'fit' });
   const parsed = parsePdf(buf);
   assert.deepEqual(parsed.errors, []);
-  assert.equal(parsed.pages.length, Object.keys(PDF_SHAPES).length);
+  assert.equal(parsed.pages.length, 2);
   const boxes = new Set(parsed.pages.map(p => p.join(' ')));
   assert.equal(boxes.size, 1, `страницы разного размера: ${[...boxes].join(' | ')}`);
 });

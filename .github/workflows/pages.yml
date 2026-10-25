@@ -2,7 +2,7 @@ name: Публикация на GitHub Pages
 
 on:
   push:
-    branches: [main, claude/photo-to-pdf-scanner-atdrr5]
+    branches: [main]
     paths: ['app/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 

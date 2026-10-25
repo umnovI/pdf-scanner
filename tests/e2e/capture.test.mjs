@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
   activeFilter, addFromCamera, addFromGallery, addSigs, cornerError, dbRecords, editorDone, launch, openApp,
-  openEditor, pageCount, pageRatios, pick, startServer, truth, waitPages,
+  openEditor, pageCount, pageRatios, pick, settle, startServer, truth, waitPages,
 } from '../helpers.mjs';
 
 let server, browser;
@@ -106,9 +106,14 @@ describe('камера и редактор', () => {
     const { page, errors } = await openApp(browser, server);
     await page.setInputFiles('#in-camera', []);
     await page.dispatchEvent('#in-camera', 'cancel');
+    await settle(page); // приложение успело бы открыть редактор или добавить страницу
     assert.equal(await pageCount(page), 0);
     assert.equal(await page.locator('#editor').isHidden(), true);
     assert.equal(await page.locator('#empty').isVisible(), true);
+    // и после этого приложение работает: следующая страница из галереи — ровно одна, лишних нет
+    await addFromGallery(page, ['white.jpg']);
+    assert.equal(await pageCount(page), 1);
+    assert.equal(await page.locator('#editor').isHidden(), true);
     assert.deepEqual(errors, []);
   });
 
@@ -208,8 +213,10 @@ describe('«Переснять»', () => {
     const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#ed-retake')]);
     void chooser;
     await page.dispatchEvent('#in-camera', 'cancel');
+    await settle(page);
     assert.equal(await pageCount(page), 2);
     assert.deepEqual(await dbRecords(page), recs);
+    assert.equal(await page.textContent('#ed-title'), 'Страница 2', 'редактор остался на той же странице');
     await pick(page, '#btn-camera', 'white.jpg');
     await page.waitForSelector('#editor:not([hidden])');
     await waitPages(page, 3);

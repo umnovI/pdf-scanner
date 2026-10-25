@@ -47,7 +47,7 @@ npx playwright install chromium   # один раз
 npm test
 ```
 
-Зависимости для тестов: Node.js 20+, npm-пакет `playwright` (devDependency), браузер Chromium.
+Зависимости для тестов: Node.js 22+, npm-пакет `playwright` (devDependency), браузер Chromium.
 Тестовые фото рисует `tools/make_fixtures.py` (Python 3, Pillow, numpy).
 
 ## Запуск локально

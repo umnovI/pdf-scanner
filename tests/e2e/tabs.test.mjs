@@ -156,7 +156,7 @@ describe('сбой записи IndexedDB', () => {
       await page.waitForFunction(() => document.getElementById('version').textContent === 'Версия: bbb2222');
       await waitPages(page, 3);
       assert.deepEqual(dialogs, [], 'второго вопроса быть не должно');
-      void errors;
+      assert.deepEqual(errors, [], 'сбой записи обработан приложением, а не выброшен как необработанная ошибка');
     }));
   }
 

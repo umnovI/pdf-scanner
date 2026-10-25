@@ -1,10 +1,12 @@
 // Общие помощники для тестов: сервер приложения, браузер «телефона», фото, разбор PDF.
-// Зависимости: Node.js 20+, playwright (devDependency), браузер Chromium.
+// Зависимости: Node.js 22+, playwright (devDependency), браузер Chromium.
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import assert from 'node:assert/strict';
+import { afterEach } from 'node:test';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { chromium, devices } from 'playwright';
@@ -25,7 +27,7 @@ const TYPES = {
 export function appFromCommit(commit) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-scanner-old-'));
   execFileSync('sh', ['-c', 'git archive "$0" app | tar -x -C "$1"', commit, tmp], { cwd: ROOT });
-  return path.join(tmp, 'app');
+  return { dir: path.join(tmp, 'app'), cleanup: () => fs.rmSync(tmp, { recursive: true, force: true }) };
 }
 
 /**
@@ -37,7 +39,11 @@ export function appFromCommit(commit) {
  */
 export async function startServer({ build, appDir, commit = process.env.APP_COMMIT } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-scanner-'));
-  fs.cpSync(appDir || (commit ? appFromCommit(commit) : path.join(ROOT, 'app')), dir, { recursive: true });
+  const old = !appDir && commit ? appFromCommit(commit) : null;
+  fs.cpSync(appDir || old?.dir || path.join(ROOT, 'app'), dir, { recursive: true });
+  // пустая страница для blankPage(): настоящий файл, а не page.route — иначе её запрос перехватит сервис-воркер приложения и получит 404
+  fs.writeFileSync(path.join(dir, '__blank.html'), '<!doctype html><title>blank</title><link rel="icon" href="data:,">');
+  old?.cleanup(); // копия уже лежит в папке сервера, распакованный коммит больше не нужен
   let current = '__BUILD__';
   const publish = v => {
     for (const f of ['sw.js', 'app.js']) {
@@ -74,20 +80,42 @@ export async function startServer({ build, appDir, commit = process.env.APP_COMM
 // кириллицу в именах скачиваемых файлов.
 export const launch = () => chromium.launch({ env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' } });
 
-/** Новый «телефон» (Pixel 7) со сбором ошибок страницы и консоли. */
-export async function phone(browser, device = 'Pixel 7') {
+// Контексты браузера, созданные в текущем тесте: после теста их закрывает afterEach ниже.
+const live = [];
+
+// Хук регистрируется при подключении помощников и действует на все тесты файла:
+// 1) закрывает все контексты, созданные через phone()/openApp()/unitPage();
+// 2) падает, если в консоли или на странице были ошибки, не разрешённые явно (опция allowErrors).
+afterEach(async () => {
+  const items = live.splice(0);
+  const unexpected = [];
+  for (const { errors, allowErrors } of items) {
+    unexpected.push(...errors.filter(e => !allowErrors.some(re => re.test(e))));
+  }
+  await Promise.all(items.map(({ ctx }) => ctx.close().catch(() => {})));
+  assert.deepEqual(unexpected, [], 'необработанные ошибки страницы или консоли');
+});
+
+/**
+ * Новый «телефон» (Pixel 7) со сбором ошибок страницы и консоли (по всем вкладкам контекста).
+ * После теста контекст закрывается сам, а непустой errors (кроме совпавших с allowErrors — список RegExp) роняет тест.
+ */
+export async function phone(browser, device = 'Pixel 7', { allowErrors = [] } = {}) {
   const ctx = await browser.newContext({ ...devices[device], acceptDownloads: true });
-  const page = await ctx.newPage();
   const errors = [];
-  page.on('pageerror', e => errors.push(e.message));
-  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+  const watch = pg => {
+    pg.on('pageerror', e => errors.push(e.message));
+    pg.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+  };
+  ctx.on('page', watch);
+  live.push({ ctx, errors, allowErrors });
+  const page = await ctx.newPage();
   return { ctx, page, errors };
 }
 
 /** Пустая страница того же происхождения: можно вызывать модули и работать с IndexedDB, не запуская приложение. */
 export async function blankPage(page, server) {
   await page.addInitScript(rawIdbInit);
-  await page.route('**/__blank.html', r => r.fulfill({ contentType: 'text/html', body: '<!doctype html><title>blank</title>' }));
   await page.goto(server.url + '__blank.html');
   return page;
 }
@@ -252,8 +280,8 @@ export function cornerError(found, expected) {
 export { rawIdbInit };
 
 /** Открывает приложение на «телефоне»; window.raw — прямой доступ к IndexedDB. */
-export async function openApp(browser, server, { device, url, init = [] } = {}) {
-  const p = await phone(browser, device);
+export async function openApp(browser, server, { device, url, init = [], allowErrors } = {}) {
+  const p = await phone(browser, device, { allowErrors });
   await p.page.addInitScript(rawIdbInit);
   for (const fn of init) await p.page.addInitScript(fn);
   await p.page.goto(url || server.url);
@@ -340,6 +368,15 @@ export const pageRatios = page => page.evaluate(async () => {
   await Promise.all(imgs.map(i => i.decode().catch(() => {})));
   return imgs.map(i => Math.round(i.naturalHeight / i.naturalWidth * 100) / 100);
 });
+
+/** Элемент по центру получает нажатие: его не перекрывает другой элемент (плашка, окно и т. п.). */
+export const isClickable = (page, selector) => page.evaluate(sel => {
+  const b = document.querySelector(sel).getBoundingClientRect();
+  return !!document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2)?.closest(sel);
+}, selector);
+
+/** Даёт приложению обработать уже посланное событие: кадр отрисовки и короткая пауза (ждать условия здесь нечего). */
+export const settle = page => page.evaluate(() => new Promise(r => requestAnimationFrame(() => setTimeout(r, 50))));
 
 /** Выбранный сейчас фильтр в редакторе. */
 export const activeFilter = page => page.evaluate(() => document.querySelector('#ed-filters .chip[aria-checked="true"]')?.dataset.f);
@@ -436,8 +473,44 @@ export const pageStamp = page => page.evaluate(() => {
 });
 
 /** Новый «телефон» с пустой страницей для вызова модулей (unit-тесты). */
-export async function unitPage(browser, server) {
-  const p = await phone(browser);
+export async function unitPage(browser, server, opts) {
+  const p = await phone(browser, undefined, opts);
   await blankPage(p.page, server);
   return p;
+}
+
+/** Размеры (ширина, высота) JPEG для проверок PDF: вертикальные, горизонтальные, узкие, крошечные. */
+export const PDF_SHAPES = {
+  'вертикальное': [300, 400], 'горизонтальное': [400, 300], 'квадрат': [300, 300],
+  'узкое вертикальное': [50, 600], 'узкое горизонтальное': [600, 50], 'крошечное': [1, 1],
+};
+
+/** Собирает PDF из JPEG заданных размеров [[w, h], …] модулем pdf.js и возвращает его байты. */
+export async function buildPdfBytes(page, sizes, opts = {}) {
+  const b64 = await inApp(page, async ({ pdf, util }, { sizes, opts }) => {
+    const jpegs = [];
+    for (const [w, h] of sizes) jpegs.push(await util.mkJpeg(w, h));
+    return util.b64(await pdf.buildPdf(jpegs, opts));
+  }, { sizes, opts });
+  return Buffer.from(b64, 'base64');
+}
+
+/**
+ * Средний цвет [r, g, b] центральной части листа фото после фильтра.
+ * Прямоугольник выборки задан долями кадра (не пикселями): по центру, 30% ширины и 24% высоты.
+ */
+export function paperColor(page, name, filter, area = { x: 0.3, y: 0.32, w: 0.3, h: 0.24 }) {
+  return inApp(page, async ({ img, util }, { b64, filter, area }) => {
+    const base = await util.loadCanvas(b64);
+    const c = img.makeCanvas(base.width, base.height);
+    c.getContext('2d').drawImage(base, 0, 0);
+    img.applyFilter(c, filter);
+    const d = c.getContext('2d').getImageData(
+      Math.round(area.x * c.width), Math.round(area.y * c.height),
+      Math.round(area.w * c.width), Math.round(area.h * c.height)).data;
+    let r = 0, g = 0, b = 0;
+    const n = d.length / 4;
+    for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+    return [r / n, g / n, b / n];
+  }, { b64: fixtureB64(name), filter, area });
 }

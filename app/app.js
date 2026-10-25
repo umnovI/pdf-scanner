@@ -183,6 +183,7 @@ async function addFiles(files, { fromCamera = false, replace = null } = {}) {
   files = [...files].filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name));
   if (!files.length) return;
   await ready; // фото, выбранное сразу после запуска, ждёт загрузки проекта
+  if (!state.project) { toast('Не удалось открыть проект — перезапустите приложение'); return; }
   if (replace && state.pages.includes(replace)) return retake(replace, files[0]);
   const added = [];
   const filter = state.project.filter; // последний выбранный в проекте фильтр
@@ -811,7 +812,7 @@ function closeProjects() {
 }
 
 function setupProjects() {
-  $('btn-projects').onclick = openProjects;
+  $('btn-projects').onclick = async () => { await ready; openProjects(); };
   $('projects-close').onclick = closeProjects;
   $('project-new').onclick = newProject;
   $('projects').addEventListener('click', e => { if (e.target === $('projects')) closeProjects(); });
@@ -834,7 +835,7 @@ function setupUpdates() {
     if (e.data?.type === 'pdf-scanner-version') {
       state.newVersion = e.data.version !== BUILD;
       showUpdateBanner();
-      if (state.newVersion) setAboutUpdate(`Есть версия ${e.data.version} — нажмите «Обновить» вверху`);
+      if (state.newVersion) setAboutUpdate(`Есть версия ${e.data.version}`);
     }
   });
   sw.startMessages(); // включаем доставку явно: addEventListener сам её не включает
@@ -861,12 +862,14 @@ function setupUpdates() {
 
 function setAboutUpdate(text) {
   $('about-update').textContent = text;
+  // Плашка «Обновить» под окном не видна — кнопка прямо в окне.
+  $('about-reload').hidden = !state.newVersion;
 }
 
 // Проверка обновления вручную. Если есть новая версия, она загрузится,
 // и новый воркер сам сообщит о себе (плашка «Обновить»).
 async function checkForUpdate() {
-  if (state.newVersion) { setAboutUpdate('Есть новая версия — нажмите «Обновить» вверху'); return; }
+  if (state.newVersion) { setAboutUpdate('Есть новая версия'); return; }
   if (!state.reg) {
     setAboutUpdate(BUILD.startsWith('__') ? 'Не проверяется (версия для разработки)' : 'Недоступно в этом браузере');
     return;
@@ -875,8 +878,18 @@ async function checkForUpdate() {
   try {
     await state.reg.update();
     const incoming = state.reg.installing || state.reg.waiting;
-    if (incoming) setAboutUpdate('Загружается новая версия…');
-    else if (!state.newVersion) setAboutUpdate('Установлена последняя версия');
+    if (incoming) {
+      setAboutUpdate('Загружается новая версия…');
+      // Если версия та же (изменился только файл воркера) или сообщение не пришло —
+      // не оставляем «Загружается…» навсегда.
+      incoming.addEventListener('statechange', () => {
+        if ((incoming.state === 'activated' || incoming.state === 'redundant') && !state.newVersion) {
+          setAboutUpdate(incoming.state === 'activated' ? 'Установлена последняя версия' : 'Не удалось загрузить — попробуйте позже');
+        }
+      });
+    } else if (!state.newVersion) {
+      setAboutUpdate('Установлена последняя версия');
+    }
   } catch (e) {
     console.warn(e);
     setAboutUpdate(navigator.onLine ? 'Не удалось проверить' : 'Нет интернета — проверьте позже');
@@ -885,7 +898,7 @@ async function checkForUpdate() {
 
 async function openAbout() {
   $('about-version').textContent = BUILD.startsWith('__') ? 'для разработки' : BUILD;
-  setAboutUpdate(state.newVersion ? 'Есть новая версия — нажмите «Обновить» вверху' : '—');
+  setAboutUpdate(state.newVersion ? 'Есть новая версия' : '—');
   const pages = state.projects.reduce((n, p) => n + idsOf(p).length, 0);
   $('about-counts').textContent = `${state.projects.length} / ${pages}`;
   $('about-storage').textContent = '—';
@@ -906,10 +919,11 @@ function setupMenu() {
   };
   document.addEventListener('click', e => { if (!menu.hidden && !menu.contains(e.target)) close(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
-  menu.addEventListener('click', e => {
+  menu.addEventListener('click', async e => {
     const act = e.target.closest('button')?.dataset.act;
     if (!act) return;
     close();
+    await ready; // проекты ещё загружаются сразу после запуска
     if (act === 'projects') openProjects();
     else if (act === 'new') newProject();
     else if (act === 'update') { openAbout(); checkForUpdate(); }
@@ -917,6 +931,7 @@ function setupMenu() {
     // 'clear' — свой обработчик у #btn-clear
   });
   $('about-check').onclick = checkForUpdate;
+  $('about-reload').onclick = () => { $('about').hidden = true; reloadForUpdate(); };
   $('about-close').onclick = () => { $('about').hidden = true; };
   $('about').addEventListener('click', e => { if (e.target === $('about')) $('about').hidden = true; });
 }
@@ -1030,4 +1045,7 @@ function setup() {
 
 setup();
 // Загрузка проектов; addFiles ждёт её (иначе фото в первую долю секунды терялось).
-const ready = restore();
+const ready = restore().catch(e => {
+  console.error(e);
+  toast('Не удалось открыть проект — перезапустите приложение', 8000);
+});

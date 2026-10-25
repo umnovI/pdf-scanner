@@ -514,3 +514,30 @@ export function paperColor(page, name, filter, area = { x: 0.3, y: 0.32, w: 0.3,
     return [r / n, g / n, b / n];
   }, { b64: fixtureB64(name), filter, area });
 }
+
+/**
+ * Замедляет открытие IndexedDB на ms (асинхронно, страница не блокируется) —
+ * чтобы действия пользователя происходили, пока проект ещё загружается.
+ */
+export function slowDbOpen(ctx, ms) {
+  return ctx.addInitScript(ms => {
+    const open = IDBFactory.prototype.open;
+    IDBFactory.prototype.open = function (...args) {
+      const req = open.apply(this, args);
+      const handlers = {};
+      for (const ev of ['success', 'upgradeneeded', 'error', 'blocked']) {
+        Object.defineProperty(req, 'on' + ev, {
+          configurable: true,
+          set(fn) { handlers[ev] = fn; },
+          get() { return handlers[ev]; },
+        });
+      }
+      const fire = ev => e => setTimeout(() => handlers[ev]?.call(req, e), ev === 'success' ? ms : 0);
+      req.addEventListener('upgradeneeded', e => handlers.upgradeneeded?.call(req, e)); // синхронно, иначе транзакция закроется
+      req.addEventListener('success', fire('success'));
+      req.addEventListener('error', fire('error'));
+      req.addEventListener('blocked', fire('blocked'));
+      return req;
+    };
+  }, ms);
+}

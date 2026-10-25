@@ -61,6 +61,7 @@
         <button class="chip" data-f="doc">Документ</button>
         <button class="chip" data-f="bw">Ч/Б</button>
       </div>
+      <button id="ed-more" class="more-btn" hidden>📷 Готово и снять ещё страницу</button>
       <div class="tools">
         <button id="ed-rotl" class="tool" title="Повернуть влево">⟲<small>Влево</small></button>
         <button id="ed-rotr" class="tool" title="Повернуть вправо">⟳<small>Вправо</small></button>
@@ -84,9 +85,16 @@
         <select id="pdf-size">
           <option value="a4">A4</option>
           <option value="letter">Letter</option>
-          <option value="fit">По размеру фото</option>
         </select>
       </label>
+      <label class="field">
+        <span>Фото на странице</span>
+        <select id="pdf-fit">
+          <option value="fill">Растянуть на всю страницу</option>
+          <option value="fit">Вписать целиком (без искажений)</option>
+        </select>
+      </label>
+      <p class="hint">Все страницы PDF будут одного размера.</p>
       <label class="field">
         <span>Поля</span>
         <select id="pdf-margin">

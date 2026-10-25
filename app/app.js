@@ -190,6 +190,7 @@ async function openEditor(p, { isNew = false } = {}) {
   ed.corners = p.corners.map(pt => [...pt]);
   ed.filter = p.filter;
   $('ed-title').textContent = `Страница ${state.pages.indexOf(p) + 1}`;
+  $('ed-more').hidden = !isNew;
   $('editor').hidden = false;
   busy(null);
   rebuildBase();
@@ -347,12 +348,14 @@ function isConvex(c) {
   return true;
 }
 
-async function editorDone() {
+async function editorDone({ another = false } = {}) {
   const p = ed.page;
   if (!isConvex(ed.corners)) {
     toast('Рамка перекручена — поправьте углы');
     return;
   }
+  // Камеру нужно открыть сразу по нажатию, иначе браузер её заблокирует.
+  if (another) $('in-camera').click();
   const changed = p.rotation !== ed.rotation || p.filter !== ed.filter ||
     JSON.stringify(p.corners) !== JSON.stringify(ed.corners);
   closeEditor();
@@ -377,7 +380,8 @@ async function editorDone() {
 function setupEditor() {
   setupHandles();
   $('ed-cancel').onclick = closeEditor;
-  $('ed-done').onclick = editorDone;
+  $('ed-done').onclick = () => editorDone();
+  $('ed-more').onclick = () => editorDone({ another: true });
   $('ed-rotl').onclick = () => {
     ed.rotation = (ed.rotation + 270) % 360;
     ed.corners = img.rotateCorners(ed.corners, -1);
@@ -430,7 +434,9 @@ function formatSize(bytes) {
 function openSheet() {
   state.pdf = null;
   $('pdf-name').value = defaultName();
-  $('pdf-size').value = settings.get('size', 'a4');
+  const size = settings.get('size', 'a4');
+  $('pdf-size').value = size === 'letter' ? 'letter' : 'a4';
+  $('pdf-fit').value = settings.get('fit', 'fill') === 'fit' ? 'fit' : 'fill';
   $('pdf-margin').value = settings.get('margin', '0');
   $('pdf-quality').value = settings.get('quality', 'high');
   resetSheetResult();
@@ -456,6 +462,8 @@ async function recompress(blob, { maxSide, q }) {
 async function makePdf() {
   const size = $('pdf-size').value;
   const margin = $('pdf-margin').value;
+  const fit = $('pdf-fit').value;
+  settings.set('fit', fit);
   const quality = $('pdf-quality').value;
   settings.set('size', size);
   settings.set('margin', margin);
@@ -470,7 +478,7 @@ async function makePdf() {
     }
     busy('Собираю PDF…');
     await frame();
-    const blob = await buildPdf(jpegs, { size, margin, title: name });
+    const blob = await buildPdf(jpegs, { size, margin, fit, title: name });
     state.pdf = { blob, name };
     $('pdf-result').textContent = `Готово: ${state.pages.length} стр., ${formatSize(blob.size)}`;
     $('pdf-result').hidden = false;
@@ -550,7 +558,7 @@ function setup() {
   $('pdf-download').onclick = downloadPdf;
   $('pdf-close').onclick = () => { $('sheet').hidden = true; state.pdf = null; };
   $('sheet').addEventListener('click', e => { if (e.target === $('sheet')) $('pdf-close').click(); });
-  ['pdf-size', 'pdf-margin', 'pdf-quality', 'pdf-name'].forEach(id => {
+  ['pdf-size', 'pdf-fit', 'pdf-margin', 'pdf-quality', 'pdf-name'].forEach(id => {
     $(id).addEventListener('input', () => { if (state.pdf) resetSheetResult(); });
   });
 

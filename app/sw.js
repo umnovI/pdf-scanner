@@ -1,5 +1,5 @@
 // Кэш приложения для работы без интернета.
-const CACHE = 'pdf-scanner-v1';
+const CACHE = 'pdf-scanner-v2';
 const FILES = [
   './',
   'index.html',

@@ -31,17 +31,14 @@ export function jpegInfo(bytes) {
 
 const num = v => (Math.round(v * 100) / 100).toString();
 
+// Все страницы одного размера (всегда книжная ориентация).
 // Возвращает [ширина страницы, высота страницы, x, y, ширина картинки, высота картинки] в пунктах.
-function layout(iw, ih, sizeName, margin) {
-  if (sizeName === 'fit') {
-    const pw = PAGE_SIZES.a4[0];
-    const dw = pw - 2 * margin;
-    const dh = dw * ih / iw;
-    return [pw, dh + 2 * margin, margin, margin, dw, dh];
-  }
-  let [pw, ph] = PAGE_SIZES[sizeName] || PAGE_SIZES.a4;
-  if (iw > ih) [pw, ph] = [ph, pw]; // альбомная картинка — альбомная страница
-  const k = Math.min((pw - 2 * margin) / iw, (ph - 2 * margin) / ih);
+// fit = 'fill' — картинка растягивается на всю страницу, иначе вписывается с сохранением пропорций.
+function layout(iw, ih, sizeName, margin, fit) {
+  const [pw, ph] = PAGE_SIZES[sizeName] || PAGE_SIZES.a4;
+  const aw = pw - 2 * margin, ah = ph - 2 * margin;
+  if (fit === 'fill') return [pw, ph, margin, margin, aw, ah];
+  const k = Math.min(aw / iw, ah / ih);
   const dw = iw * k, dh = ih * k;
   return [pw, ph, (pw - dw) / 2, (ph - dh) / 2, dw, dh];
 }
@@ -69,7 +66,7 @@ function pdfDate(d) {
 
 /**
  * @param {Blob[]} jpegs  JPEG-картинки страниц по порядку
- * @param {{size?: string, margin?: number, title?: string}} opts
+ * @param {{size?: string, margin?: number, fit?: string, title?: string}} opts
  * @returns {Promise<Blob>}
  */
 export async function buildPdf(jpegs, opts = {}) {
@@ -105,7 +102,7 @@ export async function buildPdf(jpegs, opts = {}) {
   for (let i = 0; i < n; i++) {
     const bytes = new Uint8Array(await jpegs[i].arrayBuffer());
     const info = jpegInfo(bytes);
-    const [pw, ph, x, y, dw, dh] = layout(info.width, info.height, size, margin);
+    const [pw, ph, x, y, dw, dh] = layout(info.width, info.height, size, margin, opts.fit);
     const pageId = 3 + 3 * i, contentId = pageId + 1, imageId = pageId + 2;
     const content = `q ${num(dw)} 0 0 ${num(dh)} ${num(x)} ${num(y)} cm /Im0 Do Q`;
     const cs = info.components === 1 ? '/DeviceGray' : info.components === 4 ? '/DeviceCMYK' : '/DeviceRGB';

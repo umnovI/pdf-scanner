@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
-  addFromCamera, addFromGallery, addSigs, bannerVisible, checkUpdate, launch, makePdf, openApp, openEditor,
+  reload, addFromCamera, addFromGallery, addSigs, bannerVisible, checkUpdate, launch, makePdf, openApp, openEditor,
   pageSigs, startServer, swBarrier, swIdle, swReady, versionText, waitBannerFlag, waitPages,
 } from '../helpers.mjs';
 
@@ -125,7 +125,7 @@ describe('офлайн', () => {
     const reachable = await page.evaluate(() => fetch('/нет-такого-файла-' + Date.now()).then(() => true, () => false));
     assert.equal(reachable, false, 'офлайн-режим браузера должен действовать');
 
-    await page.reload();
+    await reload(page);
     await waitPages(page, 2);
     assert.deepEqual(await pageSigs(page), [0, 1]);
     assert.equal(await versionText(page), 'Версия: aaa1111');
@@ -141,7 +141,7 @@ describe('офлайн', () => {
     await swReady(page);
     await swIdle(page);
     await ctx.setOffline(true);
-    await page.reload();
+    await reload(page);
     await page.waitForSelector('#btn-camera');
     await addFromCamera(page, 'white.jpg');
     await page.click('#ed-done');

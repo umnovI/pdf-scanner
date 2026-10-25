@@ -43,6 +43,23 @@ describe('открытие файлов разной упаковки', () => {
     assert.deepEqual((await pageGeom(doc, doc.pageRefs[0])).box, [0, 0, 400, 500]);
   });
 
+  test('гибридный файл, где объекты потока помечены в таблице свободными (f): записи /XRefStm их перекрывают', async () => {
+    const bytes = fx('hybrid-free');
+    const t = latin1(bytes);
+    assert.match(t, /\n0000000000 00000 f \n0000000000 00000 f \n/, 'в таблице объекты 2 и 3 свободны');
+    assert.match(t, /\/XRefStm \d+/);
+    const orig = PdfDoc.prototype.rebuildXref;
+    let rebuilt = 0;
+    PdfDoc.prototype.rebuildXref = function (...a) { rebuilt++; return orig.apply(this, a); };
+    try {
+      const doc = await PdfDoc.load(bytes);
+      assert.equal(rebuilt, 0, 'читается по таблицам, не через восстановление');
+      assert.deepEqual(await pageMarks(doc), ['HYB-P1']);
+      assert.deepEqual((await pageGeom(doc, doc.pageRefs[0])).box, [0, 0, 400, 500]);
+      assert.equal(doc.xref.get(3).type, 2);
+    } finally { PdfDoc.prototype.rebuildXref = orig; }
+  });
+
   test('инкрементальное обновление: берётся новая ревизия (/Rotate 90), остальное — из старой', async () => {
     const doc = await PdfDoc.load(fx('incremental'));
     assert.deepEqual(await Promise.all(doc.pageRefs.map(async p => (await pageGeom(doc, p)).rotate)), [90, 0, 0]);
@@ -67,7 +84,7 @@ describe('открытие файлов разной упаковки', () => {
     PdfDoc.prototype.rebuildXref = function (...a) { rebuilt++; return orig.apply(this, a); };
     try {
       const used = async f => { rebuilt = 0; await PdfDoc.load(fx(f)); return rebuilt > 0; };
-      for (const f of ['text', 'objstm', 'linearized', 'incremental', 'hybrid', 'inherited', 'link', 'images']) {
+      for (const f of ['text', 'objstm', 'linearized', 'incremental', 'hybrid', 'hybrid-free', 'inherited', 'link', 'images']) {
         assert.equal(await used(f), false, `${f}.pdf не должен требовать восстановления`);
       }
       for (const f of ['bad-startxref', 'shifted', 'truncated']) {
@@ -381,5 +398,26 @@ describe('фильтры потоков', () => {
 
   test('decodeStream: повреждённый Flate — PdfError', async () => {
     await assert.rejects(decodeStream(new Stream(new Map([['Filter', name('FlateDecode')]]), new Uint8Array(8).fill(0xFF)), new Set(), v => v), PdfError);
+  });
+});
+
+describe('stripExif (pdftools.js)', () => {
+  test('убирает блок APP1 Exif, остальные сегменты и данные не трогает; без Exif — те же байты', async () => {
+    const { stripExif } = await import('../../app/pdftools.js');
+    const app0 = [0xFF, 0xE0, 0, 4, 1, 2];
+    const exif = [0xFF, 0xE1, 0, 10, 0x45, 0x78, 0x69, 0x66, 0, 0, 1, 2]; // длина 10 включая 2 байта длины
+    const xmp = [0xFF, 0xE1, 0, 8, 0x68, 0x74, 0x74, 0x70, 0, 0];        // APP1, но не Exif
+    const tail = [0xFF, 0xDA, 0, 2, 9, 9, 9, 0xFF, 0xD9];
+    const mk = (...parts) => Uint8Array.from([0xFF, 0xD8, ...parts.flat()]);
+    assert.deepEqual([...stripExif(mk(app0, exif, xmp, tail))], [...mk(app0, xmp, tail)]);
+    assert.deepEqual([...stripExif(mk(exif, exif, tail))], [...mk(tail)], 'несколько блоков');
+    const plain = mk(app0, xmp, tail);
+    assert.equal(stripExif(plain), plain, 'без Exif возвращается тот же массив');
+    const notJpeg = Uint8Array.from([1, 2, 3]);
+    assert.equal(stripExif(notJpeg), notJpeg);
+    assert.equal(stripExif(new Uint8Array(0)).length, 0);
+    // «Exif» внутри данных изображения после SOS не ищется
+    const tricky = mk(app0, [0xFF, 0xDA, 0, 2], exif);
+    assert.deepEqual([...stripExif(tricky)], [...tricky]);
   });
 });

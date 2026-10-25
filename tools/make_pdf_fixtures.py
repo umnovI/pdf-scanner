@@ -183,6 +183,8 @@ def hybrid(mark_free):
     return bytes(out)
 
 
+put("hybrid-free.pdf", hybrid(True), pages=1, marks=["HYB-P1"], mediaBoxes=[[0, 0, 400, 500]],
+    note="гибридный: объекты потока в таблице помечены свободными (f), настоящие записи — в /XRefStm (PDF 1.7, 7.5.8.4)")
 put("hybrid.pdf", hybrid(False), pages=1, marks=["HYB-P1"], mediaBoxes=[[0, 0, 400, 500]],
     note="гибридный: объектов потока в таблице нет, они описаны в /XRefStm")
 

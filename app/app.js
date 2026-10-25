@@ -143,7 +143,7 @@ function renderList() {
     list.appendChild(li);
   });
   $('empty').hidden = n > 0;
-  $('btn-clear').hidden = n === 0;
+  $('btn-clear').disabled = n === 0;
   $('btn-pdf').disabled = n === 0;
   $('btn-pdf').innerHTML = `<span aria-hidden="true">📄</span> PDF${n ? ` (${n})` : ''}`;
 }
@@ -827,6 +827,7 @@ function setupUpdates() {
     if (e.data?.type === 'pdf-scanner-version') {
       state.newVersion = e.data.version !== BUILD;
       showUpdateBanner();
+      if (state.newVersion) setAboutUpdate(`Есть версия ${e.data.version} — нажмите «Обновить» вверху`);
     }
   });
   sw.startMessages(); // включаем доставку явно: addEventListener сам её не включает
@@ -838,6 +839,7 @@ function setupUpdates() {
 
   let lastCheck = Date.now();
   sw.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    state.reg = reg;
     const check = () => {
       if (document.hidden || Date.now() - lastCheck < 5 * 60 * 1000) return;
       lastCheck = Date.now();
@@ -846,6 +848,70 @@ function setupUpdates() {
     document.addEventListener('visibilitychange', check);
     setInterval(check, 60 * 60 * 1000);
   }).catch(console.warn);
+}
+
+// ---------- Меню и «О приложении» ----------
+
+function setAboutUpdate(text) {
+  $('about-update').textContent = text;
+}
+
+// Проверка обновления вручную. Если есть новая версия, она загрузится,
+// и новый воркер сам сообщит о себе (плашка «Обновить»).
+async function checkForUpdate() {
+  if (state.newVersion) { setAboutUpdate('Есть новая версия — нажмите «Обновить» вверху'); return; }
+  if (!state.reg) {
+    setAboutUpdate(BUILD.startsWith('__') ? 'Не проверяется (версия для разработки)' : 'Недоступно в этом браузере');
+    return;
+  }
+  setAboutUpdate('Проверяю…');
+  try {
+    await state.reg.update();
+    const incoming = state.reg.installing || state.reg.waiting;
+    if (incoming) setAboutUpdate('Загружается новая версия…');
+    else if (!state.newVersion) setAboutUpdate('Установлена последняя версия');
+  } catch (e) {
+    console.warn(e);
+    setAboutUpdate(navigator.onLine ? 'Не удалось проверить' : 'Нет интернета — проверьте позже');
+  }
+}
+
+async function openAbout() {
+  $('about-version').textContent = BUILD.startsWith('__') ? 'для разработки' : BUILD;
+  setAboutUpdate(state.newVersion ? 'Есть новая версия — нажмите «Обновить» вверху' : '—');
+  const pages = state.projects.reduce((n, p) => n + idsOf(p).length, 0);
+  $('about-counts').textContent = `${state.projects.length} / ${pages}`;
+  $('about-storage').textContent = '—';
+  $('about').hidden = false;
+  try {
+    const { usage } = await navigator.storage.estimate();
+    $('about-storage').textContent = usage < 1024 * 1024 ? `${Math.round(usage / 1024)} КБ` : `${(usage / 1024 / 1024).toFixed(1)} МБ`;
+  } catch { /* браузер не сообщает */ }
+}
+
+function setupMenu() {
+  const menu = $('menu'), btn = $('btn-menu');
+  const close = () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+  btn.onclick = e => {
+    e.stopPropagation();
+    menu.hidden = !menu.hidden;
+    btn.setAttribute('aria-expanded', String(!menu.hidden));
+  };
+  document.addEventListener('click', e => { if (!menu.hidden && !menu.contains(e.target)) close(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+  menu.addEventListener('click', e => {
+    const act = e.target.closest('button')?.dataset.act;
+    if (!act) return;
+    close();
+    if (act === 'projects') openProjects();
+    else if (act === 'new') newProject();
+    else if (act === 'update') { openAbout(); checkForUpdate(); }
+    else if (act === 'about') openAbout();
+    // 'clear' — свой обработчик у #btn-clear
+  });
+  $('about-check').onclick = checkForUpdate;
+  $('about-close').onclick = () => { $('about').hidden = true; };
+  $('about').addEventListener('click', e => { if (e.target === $('about')) $('about').hidden = true; });
 }
 
 // «Обновить»: перезагрузка, когда это безопасно для несохранённой работы.
@@ -922,6 +988,7 @@ function setup() {
     if (state.persist) persistOrder(db.removePages(projectRecord(), removed, otherProjects()));
   };
   setupProjects();
+  setupMenu();
 
   $('pdf-make').onclick = makePdf;
   $('pdf-share').onclick = sharePdf;

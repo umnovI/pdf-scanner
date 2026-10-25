@@ -21,8 +21,21 @@
       <span id="project-name" class="project-name">Сканер PDF</span>
       <span aria-hidden="true" class="caret">▾</span>
     </button>
-    <button id="btn-clear" class="icon-btn" title="Удалить все страницы" hidden>Очистить</button>
+    <button id="btn-menu" class="menu-btn" aria-label="Меню" aria-haspopup="menu" aria-expanded="false">⋮</button>
+    <div id="menu" class="menu" role="menu" hidden>
+      <button role="menuitem" data-act="projects">📁 Проекты</button>
+      <button role="menuitem" data-act="new">＋ Новый проект</button>
+      <button role="menuitem" data-act="clear" id="btn-clear" class="danger">🗑 Очистить проект</button>
+      <button role="menuitem" data-act="update">⟳ Проверить обновления</button>
+      <button role="menuitem" data-act="about">ℹ О приложении</button>
+    </div>
   </header>
+  <!-- Плашка обновления — в потоке страницы под шапкой: ничего не перекрывает,
+       а редактор и окна (поверх страницы) закрывают её сами. -->
+  <div id="update" class="update" hidden>
+    <span>Вышла новая версия</span>
+    <button id="update-btn">Обновить</button>
+  </div>
 
   <main id="main">
     <section id="empty" class="empty">
@@ -141,16 +154,31 @@
     </div>
   </div>
 
+  <!-- О приложении -->
+  <div id="about" class="sheet-backdrop" hidden>
+    <div class="sheet" role="dialog" aria-labelledby="about-title">
+      <h2 id="about-title">О приложении</h2>
+      <dl class="about-list">
+        <dt>Приложение</dt><dd>Сканер PDF</dd>
+        <dt>Версия</dt><dd id="about-version"></dd>
+        <dt>Обновления</dt><dd id="about-update">—</dd>
+        <dt>Проектов / страниц</dt><dd id="about-counts"></dd>
+        <dt>Занято на телефоне</dt><dd id="about-storage">—</dd>
+      </dl>
+      <p class="hint">Фото и PDF обрабатываются и хранятся только на этом телефоне, в интернет не отправляются.</p>
+      <div class="sheet-actions">
+        <button id="about-check" class="action wide">⟳ Проверить обновления</button>
+        <a class="text-btn link" href="https://github.com/umnovI/pdf-scanner" target="_blank" rel="noopener">Исходный код на GitHub</a>
+        <button id="about-close" class="text-btn">Закрыть</button>
+      </div>
+    </div>
+  </div>
+
   <div id="busy" class="busy" hidden>
     <div class="spinner"></div>
     <p id="busy-text">Обработка…</p>
   </div>
   <div id="toast" class="toast" hidden></div>
-  <!-- #update должен идти после #editor, #sheet, #projects и #busy: на этом держится правило в style.css -->
-  <div id="update" class="update" hidden>
-    <span>Вышла новая версия</span>
-    <button id="update-btn">Обновить</button>
-  </div>
 
   <script type="module" src="app.js"></script>
 </body>

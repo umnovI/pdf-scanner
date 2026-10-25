@@ -83,9 +83,12 @@ export async function startServer({ build, appDir, commit = process.env.APP_COMM
   };
 }
 
-// UTF-8 — как на телефоне; иначе Chromium в контейнере без локали теряет
-// кириллицу в именах скачиваемых файлов.
-export const launch = () => chromium.launch({ env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' } });
+// UTF-8 — как на телефоне (иначе Chromium в контейнере без локали теряет кириллицу
+// в именах скачиваемых файлов). Шрифт — DejaVu Sans (tests/fonts.conf): одинаково
+// локально и в CI, и шире телефонных — вёрстка проверяется с запасом.
+export const launch = () => chromium.launch({
+  env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', FONTCONFIG_FILE: path.join(ROOT, 'tests', 'fonts.conf') },
+});
 
 // Контексты браузера, созданные в текущем тесте: после теста их закрывает afterEach ниже.
 const live = [];

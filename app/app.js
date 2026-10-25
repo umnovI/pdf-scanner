@@ -796,6 +796,8 @@ function showThumb(im, blob) {
   if (!blob || !im) return;
   const url = URL.createObjectURL(blob);
   projectThumbs.push(url);
+  // Не загрузилась — остаётся значок документа, а не «битая картинка».
+  im.onerror = () => { im.hidden = true; };
   im.src = url;
   im.hidden = false;
 }

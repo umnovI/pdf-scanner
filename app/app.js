@@ -179,8 +179,10 @@ async function processPage(p) {
 }
 
 async function addFiles(files, { fromCamera = false, replace = null } = {}) {
+  // Сначала копия списка: поле выбора файла очищается сразу после вызова.
   files = [...files].filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name));
   if (!files.length) return;
+  await ready; // фото, выбранное сразу после запуска, ждёт загрузки проекта
   if (replace && state.pages.includes(replace)) return retake(replace, files[0]);
   const added = [];
   const filter = state.project.filter; // последний выбранный в проекте фильтр
@@ -647,6 +649,9 @@ async function openProject(id, { remember = true } = {}) {
     }
   }
   let pages = state.memory.get(project.id);
+  // Открытый проект живёт в state.pages; в памяти закрытых его больше нет —
+  // иначе его страницы считались бы дважды.
+  state.memory.delete(project.id);
   if (!pages && state.persist) {
     try {
       pages = await db.loadPages(project.ids);
@@ -1024,4 +1029,5 @@ function setup() {
 }
 
 setup();
-restore();
+// Загрузка проектов; addFiles ждёт её (иначе фото в первую долю секунды терялось).
+const ready = restore();

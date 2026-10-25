@@ -1,7 +1,7 @@
 // Модуль imgproc.js: поворот, рамка, выравнивание, фильтры, поиск краёв.
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { cornerError, fixtureB64, inApp, launch, startServer, truth, unitPage } from '../helpers.mjs';
+import { cornerError, fixtureB64, inApp, launch, paperColor, startServer, truth, unitPage } from '../helpers.mjs';
 
 let server, browser;
 before(async () => { server = await startServer(); browser = await launch(); });
@@ -323,17 +323,7 @@ describe('цвет бумаги после фильтров', () => {
   /** Средний цвет центральной части листа после фильтра. */
   async function paper(name, filter) {
     const { page } = await unitPage(browser, server);
-    return inApp(page, async ({ img, util }, { b64, filter }) => {
-      const base = await util.loadCanvas(b64);
-      const c = img.makeCanvas(base.width, base.height);
-      c.getContext('2d').drawImage(base, 0, 0);
-      img.applyFilter(c, filter);
-      const d = c.getContext('2d').getImageData(300, 400, 300, 300).data;
-      let r = 0, g = 0, b = 0;
-      const n = d.length / 4;
-      for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
-      return [r / n, g / n, b / n];
-    }, { b64: fixtureB64(name), filter });
+    return paperColor(page, name, filter);
   }
 
   test('«Улучшить» оставляет жёлтую бумагу жёлтой', async () => {

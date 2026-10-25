@@ -33,12 +33,12 @@ function collectDialogs(page) {
   return messages;
 }
 
-/** «Новая версия приложения в другой вкладке» повышает версию базы до 3. */
+/** «Новая версия приложения в другой вкладке» повышает версию базы до 4 (приложение сейчас на формате v3). */
 async function upgradeDbElsewhere(ctx) {
   const other = await ctx.newPage();
   await blankPage(other, server);
-  const v = await other.evaluate(async () => { const db = await window.raw.open(3, () => {}); const n = db.version; db.close(); return n; });
-  assert.equal(v, 3);
+  const v = await other.evaluate(async () => { const db = await window.raw.open(4, () => {}); const n = db.version; db.close(); return n; });
+  assert.equal(v, 4);
   return other;
 }
 
@@ -156,7 +156,7 @@ describe('сбой записи IndexedDB', () => {
       await page.waitForFunction(() => document.getElementById('version').textContent === 'Версия: bbb2222');
       await waitPages(page, 3);
       assert.deepEqual(dialogs, [], 'второго вопроса быть не должно');
-      void errors;
+      assert.deepEqual(errors, [], 'сбой записи обработан приложением, а не выброшен как необработанная ошибка');
     }));
   }
 

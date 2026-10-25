@@ -226,7 +226,9 @@ describe('окно «О приложении»', () => {
     server.publish('def5678');
     await page.click('#about-check');
     await page.waitForFunction(() => /def5678/.test(document.getElementById('about-update').textContent));
-    assert.match(await page.textContent('#about-update'), /нажмите «Обновить»/);
+    // Регрессия: окно просило нажать «Обновить» вверху, а плашка под окном скрыта —
+    // теперь кнопка прямо в окне.
+    assert.equal(await page.locator('#about-reload').isVisible(), true, 'в окне есть «Обновить сейчас»');
     assert.equal(await page.locator('#update').isVisible(), false, 'пока открыто окно, плашка скрыта');
     await page.click('#about-close');
     await page.waitForSelector('#update', { state: 'visible' });
@@ -242,7 +244,21 @@ describe('окно «О приложении»', () => {
     assert.deepEqual(errors, []);
   }, 'abc1234'));
 
-  test('пункт меню «Проверить обновления» сразу находит новую версию', () => scenario(async ({ server, page }) => {
+  test('регрессия: «Обновить сейчас» в окне «О приложении» загружает новую версию', () => scenario(async ({ server, page }) => {
+    await swReady(page);
+    await addSigs(page, [0]);
+    await page.click('#btn-menu');
+    await page.click('#menu [data-act="about"]');
+    assert.equal(await page.locator('#about-reload').isVisible(), false, 'без новой версии кнопки нет');
+    server.publish('def5678');
+    await page.click('#about-check');
+    await page.waitForSelector('#about-reload', { state: 'visible', timeout: 15000 });
+    await page.click('#about-reload');
+    await page.waitForFunction(() => document.getElementById('version').textContent === 'Версия: def5678');
+    await waitPages(page, 1);
+  }, 'abc1234'));
+
+    test('пункт меню «Проверить обновления» сразу находит новую версию', () => scenario(async ({ server, page }) => {
     await swReady(page);
     server.publish('def5678');
     await page.click('#btn-menu');
@@ -330,4 +346,24 @@ describe('плашка «Обновить» не перекрывает шапк
     await page.waitForSelector('#update', { state: 'visible' });
     await waitBannerFlag(page);
   }));
+});
+
+describe('меню сразу после запуска', () => {
+  // Регрессия: «Новый проект» до окончания загрузки создавал проект, но загрузка
+  // текущего проекта тут же перекрывала его — открывался старый.
+  test('регрессия: «Новый проект» сразу после запуска открывает новый проект', async () => {
+    const server = await startServer();
+    try {
+      const { phone, slowDbOpen } = await import('../helpers.mjs');
+      const { page, ctx } = await phone(browser);
+      await slowDbOpen(ctx, 1500); // загрузка проекта точно не успеет
+      await page.goto(server.url);
+      await page.click('#btn-menu');
+      await page.click('#menu [data-act="new"]');
+      await page.waitForFunction(() => document.getElementById('project-name').textContent === 'Проект 2');
+      // Через секунду всё ещё открыт новый проект (загрузка не перекрыла его).
+      await page.waitForTimeout(1500);
+      assert.equal(await page.textContent('#project-name'), 'Проект 2');
+    } finally { await server.close(); }
+  });
 });

@@ -483,6 +483,7 @@ body:has(#editor:not([hidden]), #sheet:not([hidden]), #projects:not([hidden]), #
 }
 .menu button:active { background: var(--bg); }
 .menu button.danger { color: var(--danger); }
+.menu button:disabled { opacity: .4; }
 .about-list { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; margin: 0 0 12px; }
 .about-list dt { color: var(--muted); font-size: 14px; }
 .about-list dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }

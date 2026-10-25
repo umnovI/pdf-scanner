@@ -123,6 +123,29 @@ def main():
     a[:, 600:] *= np.linspace(1.0, 1.25, W - 600)[None, :, None]  # блик справа
     save("ornate.jpg", Image.fromarray(a.clip(0, 255).astype("uint8")), gq)
 
+    # Свет пятном (ярко в центре, темнее к краям).
+    d = sheet(); text_lines(ImageDraw.Draw(d))
+    img = place(d, (90, 70, 55), q)
+    yy, xx = np.mgrid[0:H, 0:W]
+    r = np.hypot(xx - W / 2, yy - H / 2) / np.hypot(W / 2, H / 2)
+    a = np.asarray(img).astype(float) * (1.6 - 0.8 * r)[..., None]
+    save("radial.jpg", Image.fromarray(a.clip(0, 255).astype("uint8")), q)
+
+    # Ручка касается листа.
+    d = sheet(); text_lines(ImageDraw.Draw(d))
+    img = place(d, (120, 120, 120), q)
+    ImageDraw.Draw(img).rectangle([820, 600, 990, 640], fill=(20, 20, 160))
+    save("pen.jpg", img, q)
+
+    # Низкий контраст: белый лист на светло-сером столе.
+    d = sheet(); text_lines(ImageDraw.Draw(d))
+    save("lowcontrast.jpg", place(d, (215, 215, 212), q, shadow=0.2), q)
+
+    # Тёмная тень на столе вплотную к листу.
+    d = sheet(); text_lines(ImageDraw.Draw(d))
+    save("castshadow.jpg", place(d, (150, 130, 110), q,
+         extra=lambda e: e.polygon([(840, 210), (900, 240), (860, 1140), (800, 1110)], fill=(70, 60, 50))), q)
+
     # Альбомное фото (без листа) — для проверки одинакового размера страниц PDF.
     Image.new("RGB", (1200, 800), (40, 120, 60)).save(OUT / "landscape.jpg", quality=85)
 

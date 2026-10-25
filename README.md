@@ -37,6 +37,17 @@
 Workflow `.github/workflows/pages.yml` выкладывает папку `app/` на GitHub Pages при каждом
 пуше. Если Pages ещё не включён: Settings → Pages → Source: **GitHub Actions**.
 
+## Тесты
+
+```sh
+npm ci
+npx playwright install chromium   # один раз
+npm test
+```
+
+Зависимости для тестов: Node.js 22+, npm-пакет `playwright` (devDependency), браузер Chromium.
+Тестовые фото рисует `tools/make_fixtures.py` (Python 3, Pillow, numpy).
+
 ## Запуск локально
 
 ```sh

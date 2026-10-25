@@ -3,7 +3,8 @@
 // аннотации); остальное содержимое исходного файла (закладки, формы, структура
 // для чтения с экрана) в результат не попадает.
 
-import { PdfDoc, PdfError, Name, Ref, Str, Stream, decodeStream, isDict, isName, name } from './pdfread.js';
+import { PdfDoc, PdfError, Name, Ref, Str, Stream, decodeStream, isDict, isName, latin1, name } from './pdfread.js';
+import { utf16be } from './pdf.js';
 
 export { PdfDoc, PdfError };
 
@@ -52,6 +53,9 @@ function serialize(v) {
   throw new Error('Неизвестное значение PDF');
 }
 
+const SER = new WeakMap(); // объект → готовые байты
+const STREAM_END = bytesOf('\nendstream\nendobj\n');
+
 /** Новый PDF: объекты по номерам, запись в Blob. */
 export class Writer {
   constructor() { this.objs = [null]; }
@@ -73,15 +77,25 @@ export class Writer {
       let v = this.objs[n];
       if (v === undefined) v = null;
       offsets[n] = offset;
+      // Объекты, не изменившиеся между вариантами (при подборе сжатия),
+      // заново не сериализуются.
+      const cached = v && typeof v === 'object' ? SER.get(v) : null;
+      if (cached && cached.n === n) {
+        push(cached.head);
+        if (cached.raw) { push(cached.raw); push(cached.tail); }
+        continue;
+      }
+      let entry;
       if (v instanceof Stream) {
         const d = new Map(v.dict);
         d.set('Length', v.raw.length);
-        str(`${n} 0 obj\n${serialize(d)}\nstream\n`);
-        push(v.raw);
-        str('\nendstream\nendobj\n');
+        entry = { n, head: bytesOf(`${n} 0 obj\n${serialize(d)}\nstream\n`), raw: v.raw, tail: STREAM_END };
       } else {
-        str(`${n} 0 obj\n${serialize(v)}\nendobj\n`);
+        entry = { n, head: bytesOf(`${n} 0 obj\n${serialize(v)}\nendobj\n`) };
       }
+      if (v && typeof v === 'object') SER.set(v, entry);
+      push(entry.head);
+      if (entry.raw) { push(entry.raw); push(entry.tail); }
     }
     const xref = offset;
     let t = `xref\n0 ${this.objs.length}\n0000000000 65535 f \n`;
@@ -93,18 +107,7 @@ export class Writer {
 }
 
 // Строка PDF в UTF-16 (для названия документа).
-export function textStr(s) {
-  const u = [0xFE, 0xFF];
-  for (const ch of s) {
-    const c = ch.codePointAt(0);
-    if (c > 0xFFFF) {
-      const v = c - 0x10000;
-      const hi = 0xD800 + (v >> 10), lo = 0xDC00 + (v & 0x3FF);
-      u.push(hi >> 8, hi & 0xFF, lo >> 8, lo & 0xFF);
-    } else u.push(c >> 8, c & 0xFF);
-  }
-  return new Str(Uint8Array.from(u));
-}
+export const textStr = s => new Str(utf16be(s));
 
 // Ключи страницы, которые не переносятся: дерево страниц строится заново,
 // статьи (/B) и структура документа остаются в исходном файле.
@@ -114,10 +117,12 @@ const INHERITED = ['Resources', 'MediaBox', 'CropBox', 'Rotate'];
 /**
  * Копирует страницы документов в writer. Ссылки на страницы (например, из
  * ссылок-аннотаций) указывают на скопированные страницы.
- * @returns {Promise<Ref[]>} новые страницы по порядку
+ * @returns {Promise<{ kids: Ref[], ocProperties: Map|null }>} новые страницы по порядку и слои
  */
 async function copyPages(writer, docs, parentRef, onProgress) {
   const pages = [];
+  const dests = [];
+  for (const doc of docs) dests.push(await doc.namedDests());
   const map = new Map(); // `${номер источника}:${num}` → новый номер
   const queue = [];
   // Ключ — номер источника по порядку, а не документ: один и тот же документ,
@@ -144,6 +149,12 @@ async function copyPages(writer, docs, parentRef, onProgress) {
     if (isDict(v)) {
       const d = new Map();
       for (const [k, x] of v) d.set(k, remap(src, doc, x, depth + 1));
+      // Именованные ссылки (/Dest (имя), /GoTo /D (имя)) — в явные: каталог с
+      // именами в результат не копируется, а при объединении имена могли бы совпасть.
+      const named = x => (x instanceof Name ? x.n : x instanceof Str ? latin1(x.bytes) : null);
+      const key = v.has('Dest') ? 'Dest' : isName(v.get('S'), 'GoTo') ? 'D' : null;
+      const target = key && dests[src].get(named(v.get(key)));
+      if (target) d.set(key, remap(src, doc, target, depth + 1));
       return d;
     }
     return v;
@@ -170,15 +181,42 @@ async function copyPages(writer, docs, parentRef, onProgress) {
     await drain();
     onProgress?.(i + 1, pages.length);
   }
-  return pages.map(p => new Ref(p.n, 0));
+  // Слои (/OCProperties): без них скрытые по умолчанию слои (например,
+  // водяной знак только для печати) стали бы видны. Слои всех файлов объединяются.
+  let oc = null;
+  for (let src = 0; src < docs.length; src++) {
+    const root = await docs[src].get(docs[src].trailer.get('Root'));
+    const props = isDict(root) ? await docs[src].get(root.get('OCProperties')) : null;
+    if (!isDict(props)) continue;
+    const copy = remap(src, docs[src], props);
+    await drain();
+    const res = x => (x instanceof Ref ? writer.objs[x.num] : x);
+    const d = res(copy.get('D'));
+    if (!oc) {
+      oc = { OCGs: [], D: isDict(d) ? new Map(d) : new Map() };
+      for (const k of ['ON', 'OFF', 'Order', 'RBGroups', 'Locked']) oc.D.delete(k);
+    }
+    oc.OCGs.push(...[].concat(res(copy.get('OCGs')) ?? []));
+    if (isDict(d)) {
+      for (const k of ['ON', 'OFF', 'Order', 'RBGroups', 'Locked']) {
+        const list = res(d.get(k));
+        if (Array.isArray(list)) oc.D.set(k, [...(oc.D.get(k) || []), ...list]);
+      }
+    }
+  }
+  const ocProperties = oc ? new Map([['OCGs', oc.OCGs], ['D', oc.D]]) : null;
+  return { kids: pages.map(p => new Ref(p.n, 0)), ocProperties };
 }
 
-function finish(writer, pagesRef, kids, title) {
+// Дерево страниц, каталог и сведения о документе — общие для объединения и сжатия.
+function catalog(writer, pagesRef, { kids, ocProperties }, title) {
   writer.set(pagesRef.num, new Map([['Type', name('Pages')], ['Kids', kids], ['Count', kids.length]]));
-  const root = writer.add(new Map([['Type', name('Catalog')], ['Pages', pagesRef]]));
+  const cat = new Map([['Type', name('Catalog')], ['Pages', pagesRef]]);
+  if (ocProperties) cat.set('OCProperties', ocProperties);
+  const root = writer.add(cat);
   const info = new Map([['Producer', textStr('Сканер PDF')]]);
   if (title) info.set('Title', textStr(title));
-  return writer.toBlob(root, info);
+  return { root, info };
 }
 
 /**
@@ -191,8 +229,9 @@ export async function mergePdfs(sources, { title, onProgress } = {}) {
   for (const s of sources) docs.push(s instanceof PdfDoc ? s : await PdfDoc.load(s));
   const w = new Writer();
   const pagesRef = new Ref(w.alloc(), 0);
-  const kids = await copyPages(w, docs, pagesRef, onProgress);
-  return { blob: finish(w, pagesRef, kids, title), pages: kids.length };
+  const copied = await copyPages(w, docs, pagesRef, onProgress);
+  const { root, info } = catalog(w, pagesRef, copied, title);
+  return { blob: w.toBlob(root, info), pages: copied.kids.length };
 }
 
 // ---------- Сжатие ----------
@@ -242,9 +281,15 @@ function findImages(writer) {
     if (!d) continue;
     for (const k of ['SMask', 'Mask']) if (d.get(k) instanceof Ref) masks.add(d.get(k).num);
   }
+  // Маска с /Matte должна совпадать с картинкой по размеру — такие не уменьшаем.
+  const matte = n => {
+    const sm = writer.objs[n]?.dict?.get('SMask');
+    const m = sm instanceof Ref ? writer.objs[sm.num] : sm;
+    return m instanceof Stream && m.dict.has('Matte');
+  };
   const out = [];
   writer.objs.forEach((v, n) => {
-    if (!(v instanceof Stream) || masks.has(n)) return;
+    if (!(v instanceof Stream) || masks.has(n) || matte(n)) return;
     const d = v.dict;
     if (!isName(d.get('Subtype'), 'Image') || d.get('ImageMask') === true || d.has('Decode')) return;
     if (Array.isArray(d.get('Mask'))) return; // маска по цвету: после JPEG цвета «поплывут»
@@ -375,12 +420,10 @@ export async function compressPdf(bytes, target, { title, onProgress } = {}) {
   const w = new Writer();
   const pagesRef = new Ref(w.alloc(), 0);
   onProgress?.({ stage: 'read' });
-  const kids = await copyPages(w, [doc], pagesRef);
-  w.set(pagesRef.num, new Map([['Type', name('Pages')], ['Kids', kids], ['Count', kids.length]]));
+  const copied = await copyPages(w, [doc], pagesRef);
+  const kids = copied.kids;
+  const { root, info } = catalog(w, pagesRef, copied, title);
   await normalizeStreams(w);
-  const root = w.add(new Map([['Type', name('Catalog')], ['Pages', pagesRef]]));
-  const info = new Map([['Producer', textStr('Сканер PDF')]]);
-  if (title) info.set('Title', textStr(title));
   const build = () => {
     const copy = new Writer();
     copy.objs = w.objs.slice();
@@ -397,9 +440,7 @@ export async function compressPdf(bytes, target, { title, onProgress } = {}) {
   const originals = new Map(images.map(im => [im.n, w.objs[im.n]]));
 
   // Перекодирует все картинки на уровне i; картинка остаётся прежней, если новая больше.
-  const tries = new Map();
   const tryLevel = async i => {
-    if (tries.has(i)) return tries.get(i);
     for (let k = 0; k < images.length; k++) {
       const { n, kind, ch } = images[k];
       onProgress?.({ stage: 'images', level: i, image: k + 1, images: images.length });
@@ -423,19 +464,22 @@ export async function compressPdf(bytes, target, { title, onProgress } = {}) {
         bitmap?.close?.();
       }
     }
-    const blob = build();
-    tries.set(i, blob);
-    return blob;
+    return build();
   };
 
   // Наилучшее качество, при котором файл помещается: двоичный поиск по уровням.
+  // В памяти держим только лучший подходящий вариант.
   const lastIdx = LEVELS.length - 1;
   const smallest = await tryLevel(lastIdx);
-  if (smallest.size > target) return result(smallest.size < lossless.size ? smallest : lossless, false, lastIdx);
+  if (smallest.size > target) {
+    return smallest.size < lossless.size ? result(smallest, false, lastIdx) : result(lossless, false, -1);
+  }
+  let best = smallest;
   let lo = 0, hi = lastIdx; // hi всегда помещается
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if ((await tryLevel(mid)).size <= target) hi = mid; else lo = mid + 1;
+    const blob = await tryLevel(mid);
+    if (blob.size <= target) { hi = mid; best = blob; } else lo = mid + 1;
   }
-  return result(tries.get(hi), true, hi);
+  return result(best, true, hi);
 }

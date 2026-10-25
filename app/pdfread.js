@@ -36,7 +36,7 @@ const DELIM = new Uint8Array(256);
 for (const c of '()<>[]{}/%') DELIM[c.charCodeAt(0)] = 1;
 const isRegular = c => !WS[c] && !DELIM[c];
 
-const latin1 = (b, s = 0, e = b.length) => {
+export const latin1 = (b, s = 0, e = b.length) => {
   let out = '';
   for (let i = s; i < e; i += 8192) out += String.fromCharCode.apply(null, b.subarray(i, Math.min(e, i + 8192)));
   return out;
@@ -185,19 +185,68 @@ class Lexer {
 
 // ---------- Фильтры ----------
 
-async function inflate(data) {
-  const run = async (fmt, d) => {
-    const ds = new DecompressionStream(fmt);
-    const res = new Response(new Blob([d]).stream().pipeThrough(ds));
-    return new Uint8Array(await res.arrayBuffer());
-  };
+async function inflateWith(fmt, d) {
+  const ds = new DecompressionStream(fmt);
+  const res = new Response(new Blob([d]).stream().pipeThrough(ds));
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+// Распаковка «сколько получится»: данные подаются частями, и всё, что успело
+// распаковаться до ошибки (мусор в конце, обрезанный поток), сохраняется.
+async function inflatePartial(fmt, d) {
+  const ds = new DecompressionStream(fmt);
+  const writer = ds.writable.getWriter();
+  const reader = ds.readable.getReader();
+  const chunks = [];
+  let total = 0;
+  const reading = (async () => {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        total += value.length;
+      }
+    } catch { /* остаток не распаковался */ }
+  })();
   try {
-    return await run('deflate', data);
-  } catch (e) {
-    // Бывают потоки без контрольной суммы или вовсе без заголовка zlib.
-    try { return await run('deflate-raw', data.subarray(2)); } catch { /* ниже */ }
-    try { return await run('deflate-raw', data); } catch { throw new PdfError('Не удалось распаковать данные PDF'); }
+    for (let i = 0; i < d.length; i += 4096) {
+      await writer.write(d.subarray(i, Math.min(d.length, i + 4096)));
+      await new Promise(r => setTimeout(r, 0)); // даём прочитать распакованное
+    }
+    await writer.close();
+  } catch { /* ошибка в данных — берём прочитанное */ }
+  await reading;
+  if (!total) throw new Error('пусто');
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const c of chunks) { out.set(c, o); o += c.length; }
+  return out;
+}
+
+const trimEnd = d => {
+  let e = d.length;
+  while (e > 0 && WS[d[e - 1]]) e--;
+  return d.subarray(0, e);
+};
+
+async function inflate(data) {
+  const t = trimEnd(data);
+  const attempts = [
+    ['deflate', data],
+    ['deflate', t],                          // в /Length попал перевод строки
+    ['deflate-raw', t.subarray(2, -4)],     // неверная контрольная сумма
+    ['deflate-raw', t.subarray(2)],         // контрольной суммы нет
+    ['deflate-raw', t],                     // нет заголовка zlib
+  ];
+  for (const [fmt, d] of attempts) {
+    if (d.length < 1) continue;
+    try { return await inflateWith(fmt, d); } catch { /* следующий способ */ }
   }
+  for (const [fmt, d] of [['deflate', data], ['deflate-raw', data]]) {
+    try { return await inflatePartial(fmt, d); } catch { /* следующий способ */ }
+  }
+  throw new PdfError('Не удалось распаковать данные PDF');
 }
 
 // Предиктор PNG (/Predictor 10–15) из /DecodeParms.
@@ -320,20 +369,31 @@ export class PdfDoc {
     const head = latin1(bytes, 0, Math.min(1024, bytes.length));
     const start = head.indexOf('%PDF-');
     if (start < 0) throw new PdfError('Это не PDF-файл');
-    const doc = new PdfDoc(start ? bytes.subarray(start) : bytes);
+    const body = start ? bytes.subarray(start) : bytes;
+    let doc = new PdfDoc(body);
+    let healthy = false;
     try {
       await doc.readXrefChain();
       if (!isDict(await doc.get(doc.trailer.get('Root')))) throw new Error('нет каталога');
+      doc.pageRefs = await doc.collectPages();
+      healthy = doc.pageRefs.length > 0 && doc.pageRefs.length === doc.declaredCount;
     } catch (e) {
       if (e instanceof PdfError && /зашифр/.test(e.message)) throw e;
-      // Таблица ссылок повреждена — восстанавливаем её, просмотрев файл целиком.
-      doc.xref.clear(); doc.cache.clear(); doc.objStms.clear();
-      doc.trailer = new Map();
-      await doc.rebuildXref();
+    }
+    if (!healthy) {
+      // Таблица ссылок повреждена или указывает не туда (страницы потерялись) —
+      // восстанавливаем её, просмотрев файл целиком; берём вариант, где страниц больше.
+      const rebuilt = new PdfDoc(body);
+      try {
+        await rebuilt.rebuildXref();
+        rebuilt.pageRefs = await rebuilt.collectPages();
+        if (!doc.pageRefs || rebuilt.pageRefs.length > doc.pageRefs.length || rebuilt.trailer.has('Encrypt')) doc = rebuilt;
+      } catch (e) {
+        if (!doc.pageRefs?.length || (e instanceof PdfError && /зашифр/.test(e.message))) throw e;
+      }
     }
     if (doc.trailer.has('Encrypt')) throw new PdfError('PDF защищён (зашифрован) — такие файлы не поддерживаются');
-    doc.pageRefs = await doc.collectPages();
-    if (!doc.pageRefs.length) throw new PdfError('В PDF нет страниц');
+    if (!doc.pageRefs?.length) throw new PdfError('В PDF нет страниц');
     return doc;
   }
 
@@ -429,17 +489,25 @@ export class PdfDoc {
       const offset = m.index + m[0].length - m[0].replace(/^[\s>\]]/, '').length;
       this.xref.set(+m[1], { type: 1, offset, gen: +m[2] });
     }
-    // Потоки объектов тоже содержат объекты.
+    // Потоки объектов тоже содержат объекты. Побеждает то определение, что
+    // дальше в файле (более новая ревизия): для объекта из потока — место потока.
+    const where = e => (e.type === 1 ? e.offset : e.pos);
+    let xrefStmAt = -1;
     for (const [n, e] of [...this.xref]) {
+      if (e.type !== 1) continue;
       let obj;
       try { obj = this.parseIndirectAt(e.offset); } catch { continue; }
       if (obj instanceof Stream && isName(obj.dict.get('Type'), 'ObjStm')) {
         try {
           const { offsets } = await this.loadObjStm(n, obj);
-          offsets.forEach((num_, idx) => { if (!this.xref.has(num_)) this.xref.set(num_, { type: 2, stm: n, idx }); });
+          offsets.forEach((num_, idx) => {
+            const old = this.xref.get(num_);
+            if (!old || where(old) < e.offset) this.xref.set(num_, { type: 2, stm: n, idx, pos: e.offset });
+          });
         } catch { /* пропускаем повреждённый поток */ }
       }
-      if (obj instanceof Stream && isName(obj.dict.get('Type'), 'XRef') && obj.dict.has('Root')) {
+      if (obj instanceof Stream && isName(obj.dict.get('Type'), 'XRef') && obj.dict.has('Root') && e.offset > xrefStmAt) {
+        xrefStmAt = e.offset;
         for (const [k, v] of obj.dict) if (['Root', 'Info', 'Encrypt'].includes(k)) this.trailer.set(k, v);
       }
     }
@@ -461,10 +529,11 @@ export class PdfDoc {
     if (!this.trailer.has('Root')) throw new PdfError('PDF повреждён — не удалось прочитать');
   }
 
-  parseIndirectAt(offset) {
+  parseIndirectAt(offset, expect) {
     const lx = new Lexer(this.bytes, offset);
     const n = lx.word(), g = lx.word(), kw = lx.word();
     if (!/^\d+$/.test(n) || !/^\d+$/.test(g) || kw !== 'obj') throw new Error('нет объекта по адресу');
+    if (expect !== undefined && +n !== expect) throw new Error('по адресу другой объект');
     const v = lx.value();
     if (isDict(v) && lx.peekWord() === 'stream') {
       lx.word();
@@ -522,7 +591,7 @@ export class PdfDoc {
     const e = this.xref.get(v.num);
     let obj = null;
     try {
-      if (e?.type === 1) obj = this.parseIndirectAt(e.offset);
+      if (e?.type === 1) obj = this.parseIndirectAt(e.offset, v.num);
       else if (e?.type === 2) {
         const stm = await this.loadObjStm(e.stm);
         const lx = new Lexer(stm.data, stm.first + stm.positions[e.idx]);
@@ -541,6 +610,44 @@ export class PdfDoc {
     const r = await decodeStream(stream, new Set(), v => this.get(v));
     if (r.filters.length) throw new PdfError('Неподдерживаемый способ сжатия в PDF: ' + r.filters[0]?.n);
     return r.data;
+  }
+
+  /**
+   * Именованные назначения ссылок (каталог /Dests и дерево /Names /Dests):
+   * имя → явное назначение [страница /XYZ …].
+   */
+  async namedDests() {
+    if (this.dests) return this.dests;
+    const out = new Map();
+    const explicit = async v => {
+      v = await this.get(v);
+      if (isDict(v)) v = await this.get(v.get('D'));
+      return Array.isArray(v) ? v : null;
+    };
+    try {
+      const root = await this.get(this.trailer.get('Root'));
+      const old = isDict(root) ? await this.get(root.get('Dests')) : null;
+      if (isDict(old)) for (const [k, v] of old) { const d = await explicit(v); if (d) out.set(k, d); }
+      const names = isDict(root) ? await this.get(root.get('Names')) : null;
+      const seen = new Set();
+      const walk = async (node, depth) => {
+        node = await this.get(node);
+        if (!isDict(node) || depth > 32 || seen.has(node)) return;
+        seen.add(node);
+        const arr = await this.get(node.get('Names'));
+        if (Array.isArray(arr)) {
+          for (let i = 0; i + 1 < arr.length; i += 2) {
+            const k = await this.get(arr[i]);
+            const d = await explicit(arr[i + 1]);
+            if (k instanceof Str && d && !out.has(latin1(k.bytes))) out.set(latin1(k.bytes), d);
+          }
+        }
+        for (const kid of asArray(await this.get(node.get('Kids')))) await walk(kid, depth + 1);
+      };
+      if (isDict(names)) await walk(names.get('Dests'), 0);
+    } catch { /* без именованных ссылок */ }
+    this.dests = out;
+    return out;
   }
 
   // Страницы по порядку: [{ ref, dict, inherited }], наследуемые атрибуты собраны.
@@ -565,7 +672,11 @@ export class PdfDoc {
         out.push({ ref, dict: node, inherited: next });
       }
     };
-    if (isDict(root)) await walk(root.get('Pages'), {}, 0);
+    if (isDict(root)) {
+      const top = await this.get(root.get('Pages'));
+      this.declaredCount = isDict(top) ? await this.get(top.get('Count')) : undefined;
+      await walk(root.get('Pages'), {}, 0);
+    }
     return out;
   }
 }

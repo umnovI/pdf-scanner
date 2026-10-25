@@ -43,20 +43,23 @@ function layout(iw, ih, sizeName, margin, fit) {
   return [pw, ph, (pw - dw) / 2, (ph - dh) / 2, dw, dh];
 }
 
-function pdfString(s) {
-  // Строка в UTF-16BE с BOM, в шестнадцатеричном виде — так кириллица читается везде.
-  let hex = 'FEFF';
+/** Текст в UTF-16BE с BOM (так кириллица в свойствах PDF читается везде). */
+export function utf16be(s) {
+  const u = [0xFE, 0xFF];
   for (const ch of s) {
     const code = ch.codePointAt(0);
     if (code > 0xFFFF) {
       const c = code - 0x10000;
-      hex += (0xD800 + (c >> 10)).toString(16).padStart(4, '0');
-      hex += (0xDC00 + (c & 0x3FF)).toString(16).padStart(4, '0');
-    } else {
-      hex += code.toString(16).padStart(4, '0');
-    }
+      const hi = 0xD800 + (c >> 10), lo = 0xDC00 + (c & 0x3FF);
+      u.push(hi >> 8, hi & 0xFF, lo >> 8, lo & 0xFF);
+    } else u.push(code >> 8, code & 0xFF);
   }
-  return `<${hex.toUpperCase()}>`;
+  return Uint8Array.from(u);
+}
+
+function pdfString(s) {
+  // В шестнадцатеричном виде.
+  return '<' + Array.from(utf16be(s), b => b.toString(16).padStart(2, '0').toUpperCase()).join('') + '>';
 }
 
 function pdfDate(d) {

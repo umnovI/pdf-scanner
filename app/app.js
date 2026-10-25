@@ -12,8 +12,13 @@ const QUALITY = {
 };
 
 const state = {
-  pages: [],          // { id, order, src, rotation, corners, filter, out, thumb, thumbUrl }
+  pages: [],          // по порядку: { id, src, rotation, corners, filter, out, thumb, thumbUrl }
   persist: true,
+  writes: new Set(),   // незавершённые записи в IndexedDB
+  unsaved: new Set(),  // id страниц, последнее сохранение которых не удалось
+  dbFailed: false,     // не удалось удаление/порядок — после перезагрузки всё вернётся
+  newVersion: false,   // загружена новая версия приложения
+  dbClosed: false,     // база закрыта другой вкладкой — сохранять больше нельзя
   pdf: null,          // готовый PDF { blob, name }
 };
 
@@ -50,13 +55,44 @@ const frame = () => new Promise(r => requestAnimationFrame(() => setTimeout(r, 0
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
 function record(p) {
-  const { id, order, src, rotation, corners, filter, out, thumb } = p;
-  return { id, order, src, rotation, corners, filter, out, thumb };
+  const { id, src, rotation, corners, filter, out, thumb } = p;
+  return { id, src, rotation, corners, filter, out, thumb };
 }
 
+// Отслеживает запись в IndexedDB: перезагрузка для обновления её дождётся.
+// Возвращает true, если запись удалась.
+function track(promise) {
+  const done = promise.then(() => true, e => { console.warn(e); return false; });
+  state.writes.add(done);
+  done.finally(() => state.writes.delete(done));
+  return done;
+}
+
+// Номер последней записи каждой страницы: результат учитывается только у
+// последней, иначе запоздавшая старая запись перебьёт итог новой.
+const writeSeq = new Map();
+
+const pageIds = () => state.pages.map(p => p.id);
+
+// Сохраняет страницу (вместе с текущим порядком страниц).
 async function persist(p) {
   if (!state.persist) return;
-  try { await db.save(record(p)); } catch (e) { console.warn(e); }
+  const seq = (writeSeq.get(p.id) || 0) + 1;
+  writeSeq.set(p.id, seq);
+  const ok = await track(db.save(record(p), pageIds()));
+  if (writeSeq.get(p.id) !== seq) return;
+  if (ok) {
+    state.unsaved.delete(p.id);
+    state.dbFailed = false; // вместе со страницей записан и весь текущий порядок
+  } else {
+    state.unsaved.add(p.id);
+  }
+}
+
+// Запись порядка страниц (перемещение, удаление). Удачная запись заменяет
+// весь список, поэтому исправляет и последствия прошлых сбоев.
+async function persistOrder(promise) {
+  state.dbFailed = !(await track(promise));
 }
 
 function setThumb(p) {
@@ -99,7 +135,7 @@ async function move(i, dir) {
   if (j < 0 || j >= state.pages.length) return;
   [state.pages[i], state.pages[j]] = [state.pages[j], state.pages[i]];
   renderList();
-  if (state.persist) db.saveOrder(state.pages.map(record)).catch(console.warn);
+  if (state.persist) persistOrder(db.saveOrder(pageIds()));
 }
 
 async function removePage(p) {
@@ -107,7 +143,9 @@ async function removePage(p) {
   state.pages = state.pages.filter(x => x !== p);
   if (p.thumbUrl) URL.revokeObjectURL(p.thumbUrl);
   renderList();
-  if (state.persist) db.remove(p.id).catch(console.warn);
+  writeSeq.delete(p.id);
+  state.unsaved.delete(p.id);
+  if (state.persist) persistOrder(db.remove(p.id, pageIds()));
   return true;
 }
 
@@ -135,7 +173,6 @@ async function addFiles(files, { fromCamera = false, replace = null } = {}) {
       img.release(bitmap);
       const p = {
         id: uid(),
-        order: state.pages.length,
         src: await img.toBlob(c, 0.92),
         rotation: 0,
         corners: img.FULL_FRAME.map(pt => [...pt]),
@@ -569,34 +606,83 @@ function downloadPdf() {
 // ---------- Обновления ----------
 
 // Установленное приложение почти не перезагружается, поэтому новую версию
-// проверяем при запуске, при возврате из фона и раз в час. Когда новая версия
-// загружена, показываем плашку «Обновить» (страницы при этом не теряются).
+// проверяем при запуске, при возврате из фона и раз в час (пока приложение на
+// экране, не чаще раза в 5 минут). Новый воркер, став активным, рассылает свою
+// версию; если она отличается от версии страницы — показываем плашку «Обновить».
+// Поверх редактора, окна PDF и обработки плашка не видна (см. style.css).
+// Вызывается синхронно при запуске: до этого браузер придерживает сообщения
+// воркера, и рассылка, пришедшая раньше, не потеряется.
 function setupUpdates() {
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
-  const hadController = !!navigator.serviceWorker.controller;
-  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
-    const check = () => reg.update().catch(() => {});
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+  const sw = navigator.serviceWorker;
+  sw.addEventListener('message', e => {
+    if (e.data?.type === 'pdf-scanner-version') {
+      state.newVersion = e.data.version !== BUILD;
+      showUpdateBanner();
+    }
+  });
+  sw.startMessages(); // включаем доставку явно: addEventListener сам её не включает
+
+  // Вкладка вернулась из кэша браузера и могла пропустить рассылку — спрашиваем сами.
+  window.addEventListener('pageshow', e => {
+    if (e.persisted) sw.controller?.postMessage({ type: 'pdf-scanner-version' });
+  });
+
+  let lastCheck = Date.now();
+  sw.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    const check = () => {
+      if (document.hidden || Date.now() - lastCheck < 5 * 60 * 1000) return;
+      lastCheck = Date.now();
+      reg.update().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', check);
     setInterval(check, 60 * 60 * 1000);
   }).catch(console.warn);
-  // При первой установке controller появляется впервые — это не обновление.
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (hadController) $('update').hidden = false;
-  });
-  $('update-btn').onclick = () => location.reload();
+}
+
+// «Обновить»: перезагрузка, когда это безопасно для несохранённой работы.
+let updating = false;
+async function reloadForUpdate() {
+  if (updating) return;
+  updating = true;
+  try {
+    // Дожидаемся записи страниц в память браузера, иначе они пропадут.
+    while (state.writes.size) await Promise.all([...state.writes]);
+    // Пока ждали, могли открыть редактор, окно PDF или начать обработку.
+    if (!$('editor').hidden || !$('sheet').hidden || !$('busy').hidden) {
+      toast('Обновление отложено — закройте окно и нажмите «Обновить» ещё раз');
+      return;
+    }
+    const lost = !state.persist ? state.pages.length : state.pages.filter(p => state.unsaved.has(p.id)).length;
+    let question = '';
+    if (lost) question = `Страниц, не сохранённых в браузере: ${lost}. После обновления они пропадут.`;
+    else if (state.dbFailed) question = 'Часть изменений (удаление или порядок страниц) не сохранилась и после обновления отменится.';
+    if (question && !confirm(question + ' Обновить?')) return;
+    location.reload();
+  } finally {
+    updating = false;
+  }
+}
+
+// Плашка нужна, если вышла новая версия или база закрыта другой вкладкой.
+function showUpdateBanner() {
+  $('update').hidden = !(state.newVersion || state.dbClosed);
 }
 
 // ---------- Запуск ----------
 
 async function restore() {
   try {
-    const saved = await db.loadAll();
+    // Перенос старых данных и чистку отслеживаем только чтобы дождаться их перед
+    // перезагрузкой: при сбое ничего не теряется — повторятся при следующем запуске.
+    const saved = await db.loadAll(track);
     state.pages = saved.filter(p => p.src && p.out && p.thumb);
     state.pages.forEach(setThumb);
   } catch (e) {
     console.warn('Сохранение страниц недоступно:', e);
     state.persist = false;
+    if (e.blocked) toast('Закройте другие вкладки «Сканер PDF» и откройте приложение заново', 8000);
   }
   renderList();
 }
@@ -618,7 +704,12 @@ function setup() {
     state.pages.forEach(p => p.thumbUrl && URL.revokeObjectURL(p.thumbUrl));
     state.pages = [];
     renderList();
-    if (state.persist) db.clear().catch(console.warn);
+    writeSeq.clear();
+    state.unsaved.clear();
+    if (state.persist) {
+      // Удачная очистка делает базу снова согласованной с экраном.
+      track(db.clear()).then(ok => { state.dbFailed = !ok; });
+    }
   };
 
   $('pdf-make').onclick = makePdf;
@@ -639,6 +730,14 @@ function setup() {
     if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files);
   });
 
+  // Другая вкладка обновила приложение и формат базы — здесь сохранять уже нельзя
+  // (дальнейшие записи будут неудачными и попадут в учёт несохранённых).
+  self.addEventListener('pdf-scanner-db-closed', () => {
+    state.dbClosed = true;
+    showUpdateBanner();
+    toast('Приложение обновилось в другой вкладке — нажмите «Обновить»', 6000);
+  });
+  $('update-btn').onclick = reloadForUpdate;
   setupUpdates();
   $('version').textContent = 'Версия: ' + (BUILD.startsWith('__') ? 'dev' : BUILD);
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});

@@ -18,7 +18,11 @@ async function scenario(fn, build) {
   try {
     const app = await openApp(browser, server);
     await fn({ server, ...app });
-  } finally { await server.close(); }
+  } finally {
+    // Сначала браузер, потом сервер (иначе «connection refused» в консоли).
+    for (const c of browser.contexts()) await c.close().catch(() => {});
+    await server.close();
+  }
 }
 
 const menuOpen = page => page.locator('#menu').isVisible();
@@ -364,6 +368,9 @@ describe('меню сразу после запуска', () => {
       // Через секунду всё ещё открыт новый проект (загрузка не перекрыла его).
       await page.waitForTimeout(1500);
       assert.equal(await page.textContent('#project-name'), 'Проект 2');
-    } finally { await server.close(); }
+    } finally {
+      for (const c of browser.contexts()) await c.close().catch(() => {});
+      await server.close();
+    }
   });
 });

@@ -107,7 +107,10 @@ if (process.env.NODE_TEST_CONTEXT) {
 }
 
 /** Вкладка приложения, а не вспомогательная пустая (about:blank и __blank.html): только её ошибки считаются ошибками приложения. */
-const isAppUrl = url => !!url && url !== 'about:blank' && !url.endsWith('/__blank.html');
+// Ошибки считаются на всех вкладках с нашего сервера — и в приложении, и на служебной
+// __blank.html, где модульные тесты запускают код приложения. Не считаются только
+// пустые вкладки браузера.
+const isAppUrl = url => !!url && url !== 'about:blank';
 
 /**
  * Новый «телефон» (Pixel 7) со сбором ошибок страницы и консоли (по всем вкладкам приложения в контексте, кроме пустых вспомогательных).
@@ -118,7 +121,8 @@ export async function phone(browser, device = 'Pixel 7', { allowErrors = [] } = 
   const errors = [];
   const watch = pg => {
     pg.on('pageerror', e => { if (isAppUrl(pg.url())) errors.push(e.message); });
-    pg.on('console', m => { if (m.type() === 'error' && isAppUrl(m.location().url || pg.url())) errors.push(m.text()); });
+    // Привязка — по адресу вкладки (как у pageerror), а не по адресу скрипта.
+    pg.on('console', m => { if (m.type() === 'error' && isAppUrl(pg.url())) errors.push(m.text()); });
   };
   ctx.on('page', watch);
   live.push({ ctx, errors, allowErrors });

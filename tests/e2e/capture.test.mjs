@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
-  activeFilter, addFromCamera, addFromGallery, addSigs, cornerError, dbRecords, editorDone, launch, openApp,
+  reload, activeFilter, addFromCamera, addFromGallery, addSigs, cornerError, dbRecords, editorDone, launch, openApp,
   openEditor, pageCount, pageRatios, pick, startServer, truth, waitPages, watchStable,
 } from '../helpers.mjs';
 
@@ -244,7 +244,7 @@ describe('«Переснять»', () => {
     await page.waitForSelector('#editor:not([hidden])');
     await editorDone(page);
     const ratios = await pageRatios(page);
-    await page.reload();
+    await reload(page);
     await waitPages(page, 3);
     assert.deepEqual(await pageRatios(page), ratios);
   });
@@ -271,7 +271,7 @@ describe('запоминание фильтра', () => {
     await addFromCamera(page, 'white.jpg');
     await page.click('#ed-filters [data-f="bw"]');
     await editorDone(page);
-    await page.reload();
+    await reload(page);
     await waitPages(page, 1);
     await addFromCamera(page, 'school.jpg');
     assert.equal(await activeFilter(page), 'bw');

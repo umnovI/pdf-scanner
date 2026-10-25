@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
-  addFromGallery, addSigs, bannerVisible, checkUpdate, editorDone, isClickable, launch, openApp, openEditor, pageSigs,
+  reload, addFromGallery, addSigs, bannerVisible, checkUpdate, editorDone, isClickable, launch, openApp, openEditor, pageSigs,
   startServer, swBarrier, swReady, waitPages,
 } from '../helpers.mjs';
 
@@ -28,7 +28,7 @@ describe('порядок страниц (ошибка в 60cfd53, исправл
     await page.click('#ed-filters [data-f="gray"]');
     await editorDone(page);
     assert.deepEqual(await pageSigs(page), [1, 0, 2]);
-    await page.reload();
+    await reload(page);
     await waitPages(page, 3);
     assert.deepEqual(await pageSigs(page), [1, 0, 2]);
   });
@@ -43,7 +43,7 @@ describe('порядок страниц (ошибка в 60cfd53, исправл
     await openEditor(page, 2);
     await page.click('#ed-filters [data-f="bw"]');
     await editorDone(page);
-    await page.reload();
+    await reload(page);
     await waitPages(page, 3);
     assert.deepEqual(await pageSigs(page), [0, 2, 1]);
   });
@@ -57,7 +57,7 @@ describe('порядок страниц (ошибка в 60cfd53, исправл
     await waitPages(page, 2);
     await addSigs(page, [4]);
     assert.deepEqual(await pageSigs(page), [2, 3, 4]);
-    await page.reload();
+    await reload(page);
     await waitPages(page, 3);
     assert.deepEqual(await pageSigs(page), [2, 3, 4]);
   });
@@ -68,7 +68,7 @@ describe('порядок страниц (ошибка в 60cfd53, исправл
     await remove(page, 1);
     await waitPages(page, 2);
     await addSigs(page, [3]);
-    await page.reload();
+    await reload(page);
     await waitPages(page, 3);
     assert.deepEqual(await pageSigs(page), [1, 2, 3]);
   });
@@ -81,8 +81,8 @@ describe('обновление версии', () => {
       const { page } = await openApp(browser, srv);
       await swReady(page);
       srv.publish('bbb2222');
-      await page.reload();
-      await page.waitForFunction(() => document.getElementById('version').textContent === 'Версия: bbb2222');
+      await reload(page);
+      await page.waitForFunction(() => document.getElementById('version')?.textContent === 'Версия: bbb2222');
       await page.evaluate(() => { window.oldController = navigator.serviceWorker.controller; });
       await checkUpdate(page);
       await page.waitForFunction(() => navigator.serviceWorker.controller !== window.oldController);
@@ -98,7 +98,7 @@ describe('обновление версии', () => {
       const { page } = await openApp(browser, srv);
       await addFromGallery(page, ['white.jpg']);
       await swReady(page);
-      await page.reload(); // вкладка, открытая уже под управлением воркера (так бывает при каждом обычном запуске)
+      await reload(page); // вкладка, открытая уже под управлением воркера (так бывает при каждом обычном запуске)
       await waitPages(page, 1);
       await swReady(page);
       srv.publish('bbb2222');

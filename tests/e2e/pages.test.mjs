@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
-  addFromCamera, addFromGallery, addSigs, clearEnabled, clickClear, dbRecords, editorDone, launch, makePdf, makePng, openApp, openEditor, pageCount,
+  reload, addFromCamera, addFromGallery, addSigs, clearEnabled, clickClear, dbRecords, editorDone, launch, makePdf, makePng, openApp, openEditor, pageCount,
   pageSigs, parsePdf, startServer, waitPages,
 } from '../helpers.mjs';
 
@@ -16,7 +16,7 @@ async function remove(page, n, accept = true) {
   await page.locator('.page').nth(n - 1).locator('.del').click();
 }
 async function reloadAndWait(page, n) {
-  await page.reload();
+  await reload(page);
   if (n) await waitPages(page, n); else await page.waitForSelector('#empty:not([hidden])');
 }
 
@@ -167,7 +167,7 @@ describe('сохранение при правке', () => {
     await page.click('#ed-rotr');
     await page.click('#ed-filters [data-f="doc"]');
     await editorDone(page);
-    await page.reload();
+    await reload(page);
     await waitPages(page, 1);
     const [rec] = await dbRecords(page);
     assert.equal(rec.rotation, 90);

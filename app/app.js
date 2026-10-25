@@ -569,22 +569,33 @@ function downloadPdf() {
 // ---------- Обновления ----------
 
 // Установленное приложение почти не перезагружается, поэтому новую версию
-// проверяем при запуске, при возврате из фона и раз в час. Когда новая версия
-// загружена, показываем плашку «Обновить» (страницы при этом не теряются).
+// проверяем при запуске, при возврате из фона и раз в час (пока приложение на
+// экране). Когда загружена версия, отличная от текущей, показываем плашку «Обновить».
 function setupUpdates() {
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
-  const hadController = !!navigator.serviceWorker.controller;
-  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
-    const check = () => reg.update().catch(() => {});
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+  const sw = navigator.serviceWorker;
+  sw.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    const check = () => { if (!document.hidden) reg.update().catch(() => {}); };
+    document.addEventListener('visibilitychange', check);
     setInterval(check, 60 * 60 * 1000);
   }).catch(console.warn);
-  // При первой установке controller появляется впервые — это не обновление.
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (hadController) $('update').hidden = false;
+  // Сменился управляющий воркер — спрашиваем его версию. При первой установке
+  // она совпадает с версией страницы, и плашка не нужна.
+  sw.addEventListener('controllerchange', () => {
+    sw.controller?.postMessage({ type: 'version' });
   });
-  $('update-btn').onclick = () => location.reload();
+  sw.addEventListener('message', e => {
+    if (e.data?.type === 'version' && e.data.version !== BUILD) $('update').hidden = false;
+  });
+  $('update-btn').onclick = () => {
+    // Не перезагружаемся посреди работы: страница может быть ещё не сохранена.
+    if (!$('busy').hidden) { toast('Дождитесь окончания обработки'); return; }
+    if (!$('editor').hidden) { toast('Сначала закройте редактор страницы'); return; }
+    if (!state.persist && state.pages.length &&
+        !confirm('Браузер не даёт сохранять страницы — после обновления они пропадут. Обновить?')) return;
+    location.reload();
+  };
 }
 
 // ---------- Запуск ----------

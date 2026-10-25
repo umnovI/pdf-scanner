@@ -83,7 +83,12 @@ export async function startServer({ build, appDir, commit = process.env.APP_COMM
   };
 }
 
-export const launch = () => chromium.launch();
+// UTF-8 — как на телефоне (иначе Chromium в контейнере без локали теряет кириллицу
+// в именах скачиваемых файлов). Шрифт — DejaVu Sans (tests/fonts.conf): одинаково
+// локально и в CI, и шире телефонных — вёрстка проверяется с запасом.
+export const launch = () => chromium.launch({
+  env: { ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', FONTCONFIG_FILE: path.join(ROOT, 'tests', 'fonts.conf') },
+});
 
 // Контексты браузера, созданные в текущем тесте: после теста их закрывает afterEach ниже.
 const live = [];
@@ -456,4 +461,31 @@ export function paperColor(page, name, filter, area = { x: 0.3, y: 0.32, w: 0.3,
     for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
     return [r / n, g / n, b / n];
   }, { b64: fixtureB64(name), filter, area });
+}
+
+/**
+ * Замедляет открытие IndexedDB на ms (асинхронно, страница не блокируется) —
+ * чтобы действия пользователя происходили, пока проект ещё загружается.
+ */
+export function slowDbOpen(ctx, ms) {
+  return ctx.addInitScript(ms => {
+    const open = IDBFactory.prototype.open;
+    IDBFactory.prototype.open = function (...args) {
+      const req = open.apply(this, args);
+      const handlers = {};
+      for (const ev of ['success', 'upgradeneeded', 'error', 'blocked']) {
+        Object.defineProperty(req, 'on' + ev, {
+          configurable: true,
+          set(fn) { handlers[ev] = fn; },
+          get() { return handlers[ev]; },
+        });
+      }
+      const fire = ev => e => setTimeout(() => handlers[ev]?.call(req, e), ev === 'success' ? ms : 0);
+      req.addEventListener('upgradeneeded', e => handlers.upgradeneeded?.call(req, e)); // синхронно, иначе транзакция закроется
+      req.addEventListener('success', fire('success'));
+      req.addEventListener('error', fire('error'));
+      req.addEventListener('blocked', fire('blocked'));
+      return req;
+    };
+  }, ms);
 }

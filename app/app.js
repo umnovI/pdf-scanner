@@ -159,8 +159,12 @@ async function processPage(p) {
 }
 
 async function addFiles(files, { fromCamera = false, replace = null } = {}) {
+  // Сначала копия списка: поле выбора файла очищается сразу после вызова.
   files = [...files].filter(f => f.type.startsWith('image/') || /\.(jpe?g|png|heic|heif|webp)$/i.test(f.name));
   if (!files.length) return;
+  // Фото, выбранное сразу после запуска, ждёт загрузки сохранённых страниц —
+  // иначе загрузка закончится позже и перезапишет список (фото и действия пропадут).
+  await ready;
   if (replace && state.pages.includes(replace)) return retake(replace, files[0]);
   const added = [];
   const filter = settings.get('filter', 'enhance');
@@ -744,4 +748,8 @@ function setup() {
 }
 
 setup();
-restore();
+// Загрузка сохранённых страниц; addFiles ждёт её.
+const ready = restore().catch(e => {
+  console.error(e);
+  toast('Не удалось загрузить сохранённые страницы — перезапустите приложение', 8000);
+});

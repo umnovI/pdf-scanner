@@ -257,17 +257,76 @@ export async function openApp(browser, server, { device, url, init = [] } = {}) 
   await p.page.addInitScript(rawIdbInit);
   for (const fn of init) await p.page.addInitScript(fn);
   await p.page.goto(url || server.url);
+  // Приложение готово, когда загрузило проект (название в шапке). Раньше фото добавлять нельзя:
+  // у приложения ещё нет открытого проекта. В старых версиях (APP_COMMIT) этого элемента нет.
+  await p.page.waitForFunction(() => {
+    const el = document.getElementById('project-name');
+    return !el || el.textContent !== 'Сканер PDF';
+  }, null, { timeout: 15000 });
   return p;
 }
 
-/** Страницы так, как они записаны в IndexedDB, в порядке списка. */
+/** Страницы открытого проекта так, как они записаны в IndexedDB, в порядке списка. */
 export const dbRecords = page => page.evaluate(async () => {
   const pages = (await window.raw.all('pages')) || [];
   const meta = (await window.raw.all('meta')) || [];
-  const order = meta.find(m => m.key === 'order')?.ids || [];
+  const projects = (await window.raw.all('projects')) || [];
+  const cur = meta.find(m => m.key === 'current')?.id;
+  const order = projects.find(p => p.id === cur)?.ids || [];
   return order.map(id => pages.find(p => p.id === id)).filter(Boolean)
     .map(({ id, rotation, corners, filter }) => ({ id, rotation, corners, filter }));
 });
+
+/** Все проекты и открытый (id) так, как они записаны в IndexedDB. */
+export const dbProjects = page => page.evaluate(async () => ({
+  projects: (await window.raw.all('projects')) || [],
+  current: ((await window.raw.all('meta')) || []).find(m => m.key === 'current')?.id,
+  pages: ((await window.raw.all('pages')) || []).map(p => p.id),
+}));
+
+/** Открывает меню «⋮» и нажимает пункт (data-act). */
+export async function menuAct(page, act) {
+  await page.click('#btn-menu');
+  await page.click(`#menu [data-act="${act}"]`);
+}
+
+/** Открывает меню «⋮» и возвращает, доступна ли «Очистить проект» (меню остаётся открытым). */
+export async function clearEnabled(page) {
+  if (await page.locator('#menu').isHidden()) await page.click('#btn-menu');
+  return !(await page.locator('#btn-clear').isDisabled());
+}
+
+/** Меню «⋮» → «Очистить проект» (подтверждение — отдельно, через page.once('dialog')). */
+export async function clickClear(page) {
+  await page.click('#btn-menu');
+  await page.click('#btn-clear');
+}
+
+/** Открывает окно «Проекты». */
+export async function openProjects(page) {
+  await page.click('#btn-projects');
+  await page.waitForSelector('#projects:not([hidden])');
+}
+
+/** Закрывает окно «Проекты». */
+export async function closeProjects(page) {
+  await page.click('#projects-close');
+  await page.waitForSelector('#projects[hidden]', { state: 'attached' });
+}
+
+/** Создаёт новый проект через окно «Проекты»; ждёт, пока окно закроется и проект откроется. */
+export async function newProject(page) {
+  await openProjects(page);
+  await page.click('#project-new');
+  await page.waitForSelector('#projects[hidden]', { state: 'attached' });
+}
+
+/** Открывает проект по номеру в списке (с 1; новые сверху) и ждёт загрузки его страниц. */
+export async function openProjectAt(page, n) {
+  await openProjects(page);
+  await page.locator('.project .project-open').nth(n - 1).click();
+  await page.waitForSelector('#projects[hidden]', { state: 'attached' });
+}
 
 /** Нажимает кнопку, открывающую выбор файла (камера), и выбирает файл: имя из fixtures или { name, mimeType, buffer }. */
 export async function pick(page, clickSelector, file) {
@@ -341,6 +400,40 @@ export function idbFailInit() {
     };
   }
 }
+
+// ---------- Проекты ----------
+
+/** Ждёт, пока в шапке показано название открытого проекта (приложение запустилось и загрузило проект). */
+export const waitName = (page, name) =>
+  page.waitForFunction(n => document.getElementById('project-name').textContent === n, name, { timeout: 15000 });
+
+/** Ждёт, пока в IndexedDB открытым записан проект с таким названием (запись «открытого» идёт в фоне). */
+export const waitCurrentSaved = (page, name) => page.waitForFunction(async n => {
+  const projects = (await window.raw.all('projects')) || [];
+  const cur = ((await window.raw.all('meta')) || []).find(m => m.key === 'current')?.id;
+  return projects.find(p => p.id === cur)?.name === n;
+}, name, { timeout: 15000 });
+
+/** Строки окна «Проекты»: название, строка со счётчиком, открыт ли, есть ли миниатюра. */
+export const projectRows = page => page.evaluate(async () => {
+  const rows = [...document.querySelectorAll('#project-list .project')];
+  return Promise.all(rows.map(async li => {
+    const im = li.querySelector('img');
+    if (!im.hidden && im.src) await im.decode().catch(() => {});
+    return {
+      title: li.querySelector('.project-title').textContent,
+      meta: li.querySelector('.project-meta').textContent,
+      current: li.classList.contains('current'),
+      thumb: im.hidden ? null : { w: im.naturalWidth, h: im.naturalHeight },
+    };
+  }));
+});
+
+/** Дата и время как в имени PDF (ГГГГ-ММ-ДД ЧЧ-ММ) по часам страницы. */
+export const pageStamp = page => page.evaluate(() => {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}`;
+});
 
 /** Новый «телефон» с пустой страницей для вызова модулей (unit-тесты). */
 export async function unitPage(browser, server) {

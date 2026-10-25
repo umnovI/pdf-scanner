@@ -1,10 +1,10 @@
-// Запуск: node --test tools/test_sw.mjs. Внешние зависимости не нужны.
+// Изоляция кэшей service worker (выполняется в node:vm, без браузера).
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import test from 'node:test';
 
-const source = await readFile(new URL('../app/sw.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../../app/sw.js', import.meta.url), 'utf8');
 const scope = 'https://example.test/pdf-scanner/';
 const prefix = 'pdf-scanner:' + encodeURIComponent(scope) + ':';
 const current = prefix + '__BUILD__';
@@ -28,13 +28,25 @@ function worker(initial = new Map()) {
     delete: async key => stores.delete(key),
     open: async key => {
       if (!stores.has(key)) stores.set(key, new Map());
-      return { match: async request => stores.get(key).get(request.url) };
+      return {
+        // Как Cache.match: строка или запрос, адрес относительно scope, опция ignoreSearch.
+        match: async (request, options = {}) => {
+          const norm = u => {
+            const x = new URL(typeof u === 'string' ? u : u.url, scope);
+            if (options.ignoreSearch) x.search = '';
+            return x.href;
+          };
+          const wanted = norm(request);
+          for (const [k, v] of stores.get(key)) if (norm(k) === wanted) return v.clone();
+          return undefined;
+        },
+      };
     },
     // Чтение из общего Cache Storage недопустимо даже при промахе своего кэша.
     match: () => { throw new Error('Чтение чужих кэшей'); },
   };
   vm.runInNewContext(source, {
-    self, caches, URL, Request,
+    self, caches, URL, Request, Response,
     fetch: async () => { throw new Error('offline'); },
   });
   return { handlers, stores, messages };
@@ -67,7 +79,48 @@ test('офлайн-ответ берётся только из кэша теку
   assert.equal(await (await response).text(), 'own');
   stores.get(current).delete(url);
   handlers.get('fetch')(event);
-  assert.equal(await response, undefined);
+  const miss = await response;
+  assert.equal(miss.type, 'error', 'без копии — ошибка сети, а не чужой ответ');
+});
+
+/** Запускает обработчик fetch и возвращает ответ воркера. */
+async function ask(handlers, request) {
+  let response;
+  handlers.get('fetch')({ request, respondWith: promise => { response = promise; } });
+  return response;
+}
+/** Навигация: в node Request.mode выставить нельзя, поэтому свой объект запроса. */
+const navigation = url => ({ url, method: 'GET', mode: 'navigate' });
+
+test('офлайн-навигация на неизвестный адрес внутри scope отдаёт закэшированную «./»', async () => {
+  const { handlers } = worker(new Map([[current, new Map([[scope, new Response('home')]])]]));
+  for (const url of [scope + '?share=1', scope + 'unknown']) {
+    assert.equal(await (await ask(handlers, navigation(url))).text(), 'home', url);
+  }
+});
+
+test('офлайн-навигация на адрес с параметром, который есть в кэше без параметра, отдаёт его копию', async () => {
+  const { handlers } = worker(new Map([[current, new Map([
+    [scope, new Response('home')], [scope + 'page.html', new Response('page')],
+  ])]]));
+  assert.equal(await (await ask(handlers, navigation(scope + 'page.html?x=1'))).text(), 'page');
+});
+
+test('не-навигационный запрос без копии — ошибка, а не «./»', async () => {
+  const { handlers } = worker(new Map([[current, new Map([[scope, new Response('home')]])]]));
+  for (const url of [scope + 'missing.js', scope + 'missing.png?x=1']) {
+    const response = await ask(handlers, new Request(url));
+    assert.equal(response.type, 'error', url);
+  }
+});
+
+test('навигация, когда и «./» нет в кэше — ошибка', async () => {
+  const { handlers } = worker(new Map([
+    [current, new Map()],
+    ['other-app-v1', new Map([[scope, new Response('foreign')]])],
+  ]));
+  const response = await ask(handlers, navigation(scope + 'unknown'));
+  assert.equal(response.type, 'error');
 });
 
 test('воркер не перехватывает чужие пути, origin и запросы записи', () => {

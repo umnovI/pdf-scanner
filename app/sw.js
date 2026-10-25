@@ -69,6 +69,15 @@ self.addEventListener('fetch', e => {
         }
         return res;
       })
-      .catch(() => caches.open(CACHE).then(c => c.match(e.request, { ignoreSearch: true }))),
+      .catch(() => fromCache(e.request)),
   );
 });
+
+// Копия из кэша этой версии; переход на неизвестный адрес внутри приложения
+// (например, с другими параметрами) открывает главную страницу.
+async function fromCache(request) {
+  const cache = await caches.open(CACHE);
+  const hit = await cache.match(request, { ignoreSearch: true });
+  if (hit || request.mode !== 'navigate') return hit || Response.error();
+  return (await cache.match('./')) || Response.error();
+}

@@ -1,8 +1,11 @@
 // Обновление версии через сервис-воркер: плашка «Обновить», офлайн-режим.
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import {
-  reload, addFromCamera, addFromGallery, addSigs, bannerVisible, checkUpdate, launch, makePdf, openApp, openEditor,
+  reload, ROOT, appFromCommit, dbProjects,
+  addFromCamera, addFromGallery, addSigs, bannerVisible, checkUpdate, launch, makePdf, openApp, openEditor,
   pageSigs, startServer, swBarrier, swIdle, swReady, versionText, waitBannerFlag, waitPages,
 } from '../helpers.mjs';
 
@@ -149,4 +152,51 @@ describe('офлайн', () => {
     await waitPages(page, 1);
     await ctx.setOffline(false);
   }));
+});
+
+describe('обновление со старой версии приложения (как у пользователя на телефоне)', () => {
+  // Приложение из коммита d7f1e26 (база v1, порядок в поле order, плашка «Обновить» старого образца)
+  // обновляется до текущей версии: плашка появляется, «Обновить» загружает новую версию, страницы на месте.
+  test('d7f1e26 → текущая: плашка, «Обновить», страницы и порядок сохранены, перенесены в «Проект 1»', async () => {
+    const oldApp = appFromCommit('d7f1e26'); // { dir, cleanup }
+    const server = await startServer({ appDir: oldApp.dir, build: 'old1111' });
+    oldApp.cleanup();
+    try {
+      const { page, errors } = await openApp(browser, server);
+      await addSigs(page, [2, 0, 1]);
+      await swReady(page);
+      await reload(page); // обычный запуск: вкладка под управлением воркера
+      await waitPages(page, 3);
+      await swReady(page);
+      assert.equal(await versionText(page), 'Версия: old1111');
+      assert.equal(await page.evaluate(() => document.getElementById('project-name')), null, 'это действительно старый интерфейс');
+
+      // «Выкладываем» текущую версию приложения поверх старой.
+      fs.cpSync(path.join(ROOT, 'app'), server.dir, { recursive: true });
+      for (const f of ['sw.js', 'app.js']) {
+        const p = path.join(server.dir, f);
+        fs.writeFileSync(p, fs.readFileSync(p, 'utf8').replace("'__BUILD__'", "'new2222'"));
+      }
+      await checkUpdate(page);
+      await page.waitForSelector('#update', { state: 'visible' });
+      await page.click('#update-btn');
+      await page.waitForFunction(() => document.getElementById('version')?.textContent === 'Версия: new2222');
+      await waitPages(page, 3);
+      assert.deepEqual(await pageSigs(page), [2, 0, 1]);
+      assert.equal(await page.textContent('#project-name'), 'Проект 1');
+      const db = await dbProjects(page);
+      assert.equal(db.projects.length, 1);
+      assert.equal(db.projects[0].ids.length, 3);
+      assert.equal(db.pages.length, 3);
+      assert.equal(await page.evaluate(() => window.raw.version()), 3);
+      // после обновления плашки нет, приложение работает: новый проект, ещё одна страница
+      await swBarrier(page);
+      assert.equal(await bannerVisible(page), false);
+      await addSigs(page, [3]);
+      assert.deepEqual(await pageSigs(page), [2, 0, 1, 3]);
+      assert.deepEqual(errors, []);
+    } finally {
+      await server.close();
+    }
+  });
 });

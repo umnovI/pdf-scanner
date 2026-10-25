@@ -3,33 +3,28 @@ import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
   addFromCamera, addFromGallery, addSigs, bannerVisible, checkUpdate, launch, makePdf, openApp, openEditor,
-  pageSigs, startServer, swBarrier, swReady, versionText, waitBannerFlag, waitPages,
+  pageSigs, startServer, swBarrier, swIdle, swReady, versionText, waitBannerFlag, waitPages,
 } from '../helpers.mjs';
 
 let browser;
 before(async () => { browser = await launch(); });
 after(async () => { await browser?.close(); });
 
-/** Каждый тест — свой сервер (публикация версий меняет файлы) и свой «телефон». */
-async function scenario(fn, build = 'aaa1111', appOpts = {}) {
+/**
+ * Каждый тест — свой сервер (публикация версий меняет файлы) и свой «телефон».
+ * Опции: build — версия сборки; остальные (allowErrors, device…) уходят в openApp. Контекст закрывает afterEach из helpers.
+ */
+async function scenario(fn, { build = 'aaa1111', ...appOpts } = {}) {
   const server = await startServer({ build });
-  let app;
   try {
-    app = await openApp(browser, server, appOpts);
+    const app = await openApp(browser, server, appOpts);
     const dialogs = [];
     app.page.on('dialog', d => { dialogs.push(d.message()); d.dismiss(); });
     await fn({ server, dialogs, ...app });
   } finally {
-    await app?.ctx.close().catch(() => {});
     await server.close();
   }
 }
-
-/** Ждёт, пока воркер версии v закончил установку: кэш pdf-scanner-<v> есть и в нём все файлы приложения. */
-const waitCacheFilled = (page, v, files = 12) => page.waitForFunction(async ([name, n]) => {
-  if (!(await caches.has(name))) return false;
-  return (await (await caches.open(name)).keys()).length >= n;
-}, [`pdf-scanner-${v}`, files]);
 
 /** Выкладывает новую версию и заставляет браузер её заметить. */
 async function releaseNew(server, page, v = 'bbb2222') {
@@ -121,7 +116,7 @@ describe('офлайн', () => {
   test('без сети приложение открывается со своими страницами и собирает PDF', () => scenario(async ({ ctx, page }) => {
     await addSigs(page, [0, 1]);
     await swReady(page);
-    await waitCacheFilled(page, 'aaa1111'); // воркер закончил установку: кэш заполнен
+    await swIdle(page); // воркер установлен и активен, новых нет
     await ctx.setOffline(true);
     // проверка, что сеть действительно отключена и для воркера: незакэшированный адрес недоступен
     const reachable = await page.evaluate(() => fetch('/нет-такого-файла-' + Date.now()).then(() => true, () => false));
@@ -134,14 +129,14 @@ describe('офлайн', () => {
     const { buf } = await makePdf(page);
     assert.ok(buf.length > 1000);
     await ctx.setOffline(false);
-  }, 'aaa1111', {
+  }, {
     // ожидаемая ошибка консоли: намеренный запрос несуществующего адреса без сети
     allowErrors: [/^Failed to load resource: net::ERR_FAILED$/],
   }));
 
   test('офлайн: камера и редактор работают', () => scenario(async ({ ctx, page }) => {
     await swReady(page);
-    await waitCacheFilled(page, 'aaa1111');
+    await swIdle(page);
     await ctx.setOffline(true);
     await page.reload();
     await page.waitForSelector('#btn-camera');

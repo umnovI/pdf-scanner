@@ -87,6 +87,7 @@ describe('обновление версии', () => {
       await checkUpdate(page);
       await page.waitForFunction(() => navigator.serviceWorker.controller !== window.oldController);
       await swBarrier(page);
+      assert.equal(await page.evaluate(() => document.getElementById('update').hidden), true, 'флаг плашки выставлен ошибочно');
       assert.equal(await bannerVisible(page), false);
     } finally { await srv.close(); }
   });

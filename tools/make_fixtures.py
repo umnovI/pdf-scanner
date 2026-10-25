@@ -97,6 +97,32 @@ def main():
     d = Image.new("RGB", (600, 850), (250, 250, 250)); text_lines(ImageDraw.Draw(d))
     save("warm.jpg", place(d, (60, 60, 60), q, tint=(1.0, 0.9, 0.72)), q)
 
+    # Грамота с широкой тёмной узорной рамкой на тёмном фоне (баг: рамка
+    # находилась по светлой середине, а не по краю листа).
+    rng = np.random.default_rng(7)
+    g = Image.new("RGB", (600, 850), (232, 232, 228))          # светлая кромка листа
+    dd = ImageDraw.Draw(g)
+    dd.rectangle([14, 14, 586, 836], fill=(105, 92, 95))       # розовато-серая сетка
+    for k in range(14, 586, 9):
+        dd.line([(k, 14), (k + 60, 836)], fill=(150, 120, 125), width=1)
+        dd.line([(k + 60, 14), (k, 836)], fill=(150, 120, 125), width=1)
+    for _ in range(700):                                        # тёмно-зелёные завитки
+        x, y = rng.integers(14, 586), rng.integers(14, 836)
+        rr = int(rng.integers(8, 30))
+        dd.ellipse([x - rr, y - rr, x + rr, y + rr], outline=(25, 70, 50), width=int(rng.integers(3, 8)))
+    dd.rectangle([95, 110, 505, 740], fill=(246, 246, 244))   # белое поле
+    dd.text((150, 170), "ПОХВАЛЬНАЯ", fill=(190, 30, 35), font=font(44))
+    dd.text((165, 225), "ГРАМОТА", fill=(190, 30, 35), font=font(56))
+    text_lines(dd, 8, 360)
+    def carbon(e):                                              # тёмный фон с текстурой
+        for y in range(0, H, 6):
+            e.line([(0, y), (W, y + 40)], fill=(38, 38, 42), width=2)
+    gq = [(120, 110), (880, 125), (870, 1150), (130, 1140)]
+    img = place(g, (22, 22, 25), gq, extra=carbon)
+    a = np.asarray(img).astype(float)
+    a[:, 600:] *= np.linspace(1.0, 1.25, W - 600)[None, :, None]  # блик справа
+    save("ornate.jpg", Image.fromarray(a.clip(0, 255).astype("uint8")), gq)
+
     # Альбомное фото (без листа) — для проверки одинакового размера страниц PDF.
     Image.new("RGB", (1200, 800), (40, 120, 60)).save(OUT / "landscape.jpg", quality=85)
 

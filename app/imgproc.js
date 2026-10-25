@@ -490,11 +490,52 @@ export function detectDocument(canvas) {
   // слившиеся с фоном у края кадра, штрафуются.
   const weight = f => f.rect ** 4 * Math.sqrt(f.area) * (f.center ? 1 : 0.6) *
     Math.max(0.1, 1 - 2 * f.frame);
+  // 4) Заливка фона от краёв кадра: всё, что похоже на стол и связано с краем
+  //    снимка, — фон, остальное — лист. Так находится лист с широкой тёмной
+  //    узорной рамкой (грамоты, дипломы): узор отличается от стола, и заливка
+  //    останавливается на краю листа, а способы выше видят только светлую середину.
+  found.push(quadFromMask(backgroundFlood(ch, w, h, bgc, band), w, h));
+
   const ok = found.filter(f => f && f.rect >= 0.6).sort((a, b) => weight(b) - weight(a));
   if (!ok.length) return null;
   // Почти равные варианты: берём больший — меньший обычно «откусил» край листа в тени.
   const close = ok.filter(f => weight(f) >= weight(ok[0]) * 0.85);
   return close.sort((a, b) => b.area - a.area)[0].quad;
+}
+
+// Маска «не фон»: заливка от краёв кадра по пикселям, близким к цвету фона
+// bgc (медиана полосы шириной band у края). Допуск — по разбросу цвета фона.
+function backgroundFlood(ch, w, h, bgc, band) {
+  const n = w * h;
+  const dist = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    dist[i] = Math.hypot(ch[0][i] - bgc[0], ch[1][i] - bgc[1], ch[2][i] - bgc[2]);
+  }
+  const border = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (x < band || x >= w - band || y < band || y >= h - band) border.push(dist[y * w + x]);
+    }
+  }
+  border.sort((a, b) => a - b);
+  // Фон с фактурой (дерево, карбон) — допуск шире, но в разумных пределах.
+  const tol = Math.min(60, Math.max(15, 2.5 * border[Math.floor(border.length * 0.9)] + 6));
+  const bg = new Uint8Array(n);
+  const stack = new Int32Array(n);
+  let sp = 0;
+  const seed = i => { if (!bg[i] && dist[i] < tol) { bg[i] = 1; stack[sp++] = i; } };
+  for (let x = 0; x < w; x++) { seed(x); seed((h - 1) * w + x); }
+  for (let y = 0; y < h; y++) { seed(y * w); seed(y * w + w - 1); }
+  while (sp) {
+    const i = stack[--sp];
+    const x = i % w;
+    if (x > 0) seed(i - 1);
+    if (x < w - 1) seed(i + 1);
+    if (i >= w) seed(i - w);
+    if (i < n - w) seed(i + w);
+  }
+  for (let i = 0; i < n; i++) bg[i] ^= 1;
+  return bg;
 }
 
 function polygonArea(q) {

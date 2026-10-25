@@ -26,6 +26,8 @@ jobs:
       - uses: actions/configure-pages@v5
         with:
           enablement: true
+      - name: Проставить номер версии
+        run: sed -i "s/__BUILD__/${GITHUB_SHA::7}/g" app/sw.js app/app.js
       - uses: actions/upload-pages-artifact@v3
         with:
           path: app

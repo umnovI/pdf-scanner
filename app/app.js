@@ -3,6 +3,7 @@ import { buildPdf } from './pdf.js';
 import * as db from './db.js';
 
 const $ = id => document.getElementById(id);
+const BUILD = '__BUILD__'; // при публикации заменяется на номер коммита
 const OUT_QUALITY = 0.9;
 const QUALITY = {
   high: { maxSide: Infinity, q: 0.9 },
@@ -565,6 +566,27 @@ function downloadPdf() {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
+// ---------- Обновления ----------
+
+// Установленное приложение почти не перезагружается, поэтому новую версию
+// проверяем при запуске, при возврате из фона и раз в час. Когда новая версия
+// загружена, показываем плашку «Обновить» (страницы при этом не теряются).
+function setupUpdates() {
+  if (!('serviceWorker' in navigator)) return;
+  if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    const check = () => reg.update().catch(() => {});
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+    setInterval(check, 60 * 60 * 1000);
+  }).catch(console.warn);
+  // При первой установке controller появляется впервые — это не обновление.
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController) $('update').hidden = false;
+  });
+  $('update-btn').onclick = () => location.reload();
+}
+
 // ---------- Запуск ----------
 
 async function restore() {
@@ -617,9 +639,8 @@ function setup() {
     if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files);
   });
 
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-    navigator.serviceWorker.register('sw.js').catch(console.warn);
-  }
+  setupUpdates();
+  $('version').textContent = 'Версия: ' + (BUILD.startsWith('__') ? 'dev' : BUILD);
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
 }
 

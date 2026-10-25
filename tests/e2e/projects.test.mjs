@@ -495,7 +495,7 @@ describe('несохранённые страницы', () => {
     assert.deepEqual(await pageSigs(page), [0, 1]);
   }));
 
-  test('несохранённая страница в открытом проекте после переключения и возврата считается в подтверждении один раз', { todo: 'ошибка приложения: проект открыт из state.memory, и reloadForUpdate считает его страницы дважды (app.js, reloadForUpdate)' }, () => scenario(async ({ srv, page }) => {
+  test('несохранённая страница в открытом проекте после переключения и возврата считается в подтверждении один раз', () => scenario(async ({ srv, page }) => {
     await swReady(page);
     await failOn(page);
     await addSigs(page, [0]);

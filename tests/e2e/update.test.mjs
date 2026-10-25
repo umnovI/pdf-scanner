@@ -160,8 +160,9 @@ describe('обновление со старой версии приложени
   // Приложение из коммита d7f1e26 (база v1, порядок в поле order, плашка «Обновить» старого образца)
   // обновляется до текущей версии: плашка появляется, «Обновить» загружает новую версию, страницы на месте.
   test('d7f1e26 → текущая: плашка, «Обновить», страницы и порядок сохранены, перенесены в «Проект 1»', async () => {
-    const oldApp = appFromCommit('d7f1e26');
-    const server = await startServer({ appDir: oldApp, build: 'old1111' });
+    const oldApp = appFromCommit('d7f1e26'); // { dir, cleanup }
+    const server = await startServer({ appDir: oldApp.dir, build: 'old1111' });
+    oldApp.cleanup();
     try {
       const { page, errors } = await openApp(browser, server);
       await addSigs(page, [2, 0, 1]);
@@ -198,7 +199,6 @@ describe('обновление со старой версии приложени
       assert.deepEqual(errors, []);
     } finally {
       await server.close();
-      fs.rmSync(path.dirname(oldApp), { recursive: true, force: true });
     }
   });
 });

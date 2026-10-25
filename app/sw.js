@@ -1,5 +1,8 @@
 // Кэш приложения для работы без интернета.
-const CACHE = 'pdf-scanner-v4';
+// __BUILD__ при публикации заменяется на номер коммита — так у каждой версии
+// свой sw.js, и браузер замечает обновление.
+const VERSION = '__BUILD__';
+const CACHE = 'pdf-scanner-' + VERSION;
 const FILES = [
   './',
   'index.html',
@@ -27,11 +30,16 @@ self.addEventListener('activate', e => {
   );
 });
 
-// Сначала сеть (чтобы получать обновления), без сети — кэш.
+// Сначала сеть (в обход HTTP-кэша браузера, чтобы сразу получать новую версию),
+// без сети — сохранённая копия.
 self.addEventListener('fetch', e => {
-  if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
+  const url = new URL(e.request.url);
+  if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  const fresh = e.request.mode === 'navigate'
+    ? fetch(url.href, { cache: 'no-cache', credentials: 'same-origin' })
+    : fetch(new Request(e.request, { cache: 'no-cache' }));
   e.respondWith(
-    fetch(e.request)
+    fresh
       .then(res => {
         if (res.ok) {
           const copy = res.clone();

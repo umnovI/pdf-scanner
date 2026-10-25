@@ -15,7 +15,8 @@ const state = {
   pages: [],          // { id, order, src, rotation, corners, filter, out, thumb, thumbUrl }
   persist: true,
   writes: new Set(),   // незавершённые записи в IndexedDB
-  unsaved: new Set(),  // id страниц, которые не удалось сохранить
+  unsaved: new Set(),  // id страниц, последнее сохранение которых не удалось
+  dbFailed: false,     // не удалось удаление/порядок — после перезагрузки всё вернётся
   pdf: null,          // готовый PDF { blob, name }
 };
 
@@ -65,10 +66,23 @@ function track(promise) {
   return done;
 }
 
+// Номер последней записи каждой страницы: результат учитывается только у
+// последней, иначе запоздавшая старая запись перебьёт итог новой.
+const writeSeq = new Map();
+
 async function persist(p) {
   if (!state.persist) return;
-  if (await track(db.save(record(p)))) state.unsaved.delete(p.id);
-  else state.unsaved.add(p.id);
+  const seq = (writeSeq.get(p.id) || 0) + 1;
+  writeSeq.set(p.id, seq);
+  const ok = await track(db.save(record(p)));
+  if (writeSeq.get(p.id) !== seq) return;
+  if (ok) state.unsaved.delete(p.id); else state.unsaved.add(p.id);
+}
+
+// Запись, которая затрагивает не одну страницу (порядок, удаление).
+async function persistOther(promise, savedIds = []) {
+  if (await track(promise)) savedIds.forEach(id => state.unsaved.delete(id));
+  else state.dbFailed = true;
 }
 
 function setThumb(p) {
@@ -111,7 +125,7 @@ async function move(i, dir) {
   if (j < 0 || j >= state.pages.length) return;
   [state.pages[i], state.pages[j]] = [state.pages[j], state.pages[i]];
   renderList();
-  if (state.persist) track(db.saveOrder(state.pages.map(record)));
+  if (state.persist) persistOther(db.saveOrder(state.pages.map(record)), state.pages.map(p => p.id));
 }
 
 async function removePage(p) {
@@ -119,7 +133,7 @@ async function removePage(p) {
   state.pages = state.pages.filter(x => x !== p);
   if (p.thumbUrl) URL.revokeObjectURL(p.thumbUrl);
   renderList();
-  if (state.persist) track(db.remove(p.id));
+  if (state.persist) persistOther(db.remove(p.id));
   return true;
 }
 
@@ -582,9 +596,11 @@ function downloadPdf() {
 
 // Установленное приложение почти не перезагружается, поэтому новую версию
 // проверяем при запуске, при возврате из фона и раз в час (пока приложение на
-// экране, не чаще раза в 5 минут). Новый воркер, став активным, сообщает свою
+// экране, не чаще раза в 5 минут). Новый воркер, став активным, рассылает свою
 // версию; если она отличается от версии страницы — показываем плашку «Обновить».
 // Поверх редактора, окна PDF и обработки плашка не видна (см. style.css).
+// Вызывать синхронно при запуске модуля: до DOMContentLoaded браузер придерживает
+// сообщения воркера, и рассылка, пришедшая раньше, не потеряется.
 function setupUpdates() {
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
@@ -592,8 +608,10 @@ function setupUpdates() {
   sw.addEventListener('message', e => {
     if (e.data?.type === 'version') $('update').hidden = e.data.version === BUILD;
   });
-  sw.startMessages(); // получить и сообщения, пришедшие до загрузки скрипта
-  sw.addEventListener('controllerchange', () => sw.controller?.postMessage({ type: 'version' }));
+  // Вкладка вернулась из кэша браузера и могла пропустить рассылку — спрашиваем сами.
+  window.addEventListener('pageshow', e => {
+    if (e.persisted) sw.controller?.postMessage({ type: 'version' });
+  });
 
   let lastCheck = Date.now();
   sw.register('sw.js', { updateViaCache: 'none' }).then(reg => {
@@ -614,9 +632,15 @@ function setupUpdates() {
       // Дожидаемся записи страниц в память браузера, иначе они пропадут.
       while (state.writes.size) await Promise.all([...state.writes]);
       // Пока ждали, могли открыть редактор, окно PDF или начать обработку.
-      if (!$('editor').hidden || !$('sheet').hidden || !$('busy').hidden) return;
+      if (!$('editor').hidden || !$('sheet').hidden || !$('busy').hidden) {
+        toast('Обновление отложено — закройте окно и нажмите «Обновить» ещё раз');
+        return;
+      }
       const lost = !state.persist ? state.pages.length : state.pages.filter(p => state.unsaved.has(p.id)).length;
-      if (lost && !confirm(`Страниц, не сохранённых в браузере: ${lost}. После обновления они пропадут. Обновить?`)) return;
+      let question = '';
+      if (lost) question = `Страниц, не сохранённых в браузере: ${lost}. После обновления они пропадут.`;
+      else if (state.dbFailed) question = 'Часть изменений (удаление или порядок страниц) не сохранилась и после обновления отменится.';
+      if (question && !confirm(question + ' Обновить?')) return;
       location.reload();
     } finally {
       updating = false;
@@ -655,7 +679,7 @@ function setup() {
     state.pages.forEach(p => p.thumbUrl && URL.revokeObjectURL(p.thumbUrl));
     state.pages = [];
     renderList();
-    if (state.persist) track(db.clear());
+    if (state.persist) persistOther(db.clear());
   };
 
   $('pdf-make').onclick = makePdf;

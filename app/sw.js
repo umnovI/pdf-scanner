@@ -33,7 +33,11 @@ self.addEventListener('activate', e => {
   e.waitUntil(
     caches.keys()
       .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
-      .then(() => self.clients.claim()),
+      .then(() => self.clients.claim())
+      // Сообщаем страницам версию. Если скрипт страницы ещё не загрузился,
+      // браузер придержит сообщение до её подписки.
+      .then(() => self.clients.matchAll({ type: 'window' }))
+      .then(list => list.forEach(c => c.postMessage({ type: 'version', version: VERSION }))),
   );
 });
 

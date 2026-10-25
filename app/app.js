@@ -14,9 +14,8 @@ const QUALITY = {
 const state = {
   pages: [],          // { id, order, src, rotation, corners, filter, out, thumb, thumbUrl }
   persist: true,
-  writes: 0,          // незавершённые записи в IndexedDB
-  unsaved: false,     // какая-то запись не удалась — после перезагрузки данные пропадут
-  updateReady: false, // загружена новая версия приложения
+  writes: new Set(),   // незавершённые записи в IndexedDB
+  unsaved: new Set(),  // id страниц, которые не удалось сохранить
   pdf: null,          // готовый PDF { blob, name }
 };
 
@@ -45,7 +44,6 @@ function toast(text, ms = 2600) {
 function busy(text) {
   $('busy-text').textContent = text || 'Обработка…';
   $('busy').hidden = !text;
-  refreshUpdateBanner();
 }
 
 // Даём браузеру отрисовать индикатор перед тяжёлой работой.
@@ -59,20 +57,18 @@ function record(p) {
 }
 
 // Отслеживает запись в IndexedDB: перезагрузка для обновления её дождётся.
-async function track(promise) {
-  state.writes++;
-  try {
-    await promise;
-  } catch (e) {
-    console.warn(e);
-    state.unsaved = true;
-  } finally {
-    state.writes--;
-  }
+// Возвращает true, если запись удалась.
+function track(promise) {
+  const done = promise.then(() => true, e => { console.warn(e); return false; });
+  state.writes.add(done);
+  done.finally(() => state.writes.delete(done));
+  return done;
 }
 
 async function persist(p) {
-  if (state.persist) await track(db.save(record(p)));
+  if (!state.persist) return;
+  if (await track(db.save(record(p)))) state.unsaved.delete(p.id);
+  else state.unsaved.add(p.id);
 }
 
 function setThumb(p) {
@@ -244,7 +240,6 @@ async function openEditor(p, { isNew = false } = {}) {
   $('ed-title').textContent = `Страница ${state.pages.indexOf(p) + 1}`;
   $('ed-more').hidden = !isNew;
   $('editor').hidden = false;
-  refreshUpdateBanner();
   busy(null);
   rebuildBase();
   syncChips();
@@ -252,7 +247,6 @@ async function openEditor(p, { isNew = false } = {}) {
 
 function closeEditor() {
   $('editor').hidden = true;
-  refreshUpdateBanner();
   ed.page = ed.source = ed.base = ed.preview = null;
 }
 
@@ -500,7 +494,6 @@ function openSheet() {
   $('pdf-quality').value = settings.get('quality', 'high');
   resetSheetResult();
   $('sheet').hidden = false;
-  refreshUpdateBanner();
 }
 
 function resetSheetResult() {
@@ -589,23 +582,18 @@ function downloadPdf() {
 
 // Установленное приложение почти не перезагружается, поэтому новую версию
 // проверяем при запуске, при возврате из фона и раз в час (пока приложение на
-// экране, не чаще раза в 5 минут). Когда загружена версия, отличная от текущей,
-// показываем плашку «Обновить».
+// экране, не чаще раза в 5 минут). Новый воркер, став активным, сообщает свою
+// версию; если она отличается от версии страницы — показываем плашку «Обновить».
+// Поверх редактора, окна PDF и обработки плашка не видна (см. style.css).
 function setupUpdates() {
   if (!('serviceWorker' in navigator)) return;
   if (location.protocol !== 'https:' && location.hostname !== 'localhost') return;
   const sw = navigator.serviceWorker;
-  const askVersion = () => sw.controller?.postMessage({ type: 'version' });
   sw.addEventListener('message', e => {
-    if (e.data?.type === 'version' && e.data.version !== BUILD) {
-      state.updateReady = true;
-      refreshUpdateBanner();
-    }
+    if (e.data?.type === 'version') $('update').hidden = e.data.version === BUILD;
   });
-  // Сменился управляющий воркер — спрашиваем его версию. При первой установке
-  // она совпадает с версией страницы, и плашка не нужна.
-  sw.addEventListener('controllerchange', askVersion);
-  askVersion(); // на случай, если смена произошла до загрузки этого скрипта
+  sw.startMessages(); // получить и сообщения, пришедшие до загрузки скрипта
+  sw.addEventListener('controllerchange', () => sw.controller?.postMessage({ type: 'version' }));
 
   let lastCheck = Date.now();
   sw.register('sw.js', { updateViaCache: 'none' }).then(reg => {
@@ -618,20 +606,22 @@ function setupUpdates() {
     setInterval(check, 60 * 60 * 1000);
   }).catch(console.warn);
 
+  let updating = false;
   $('update-btn').onclick = async () => {
-    // Дожидаемся записи страниц в память браузера, иначе они пропадут.
-    while (state.writes > 0) await new Promise(r => setTimeout(r, 100));
-    if ((!state.persist || state.unsaved) && state.pages.length &&
-        !confirm('Часть страниц не сохранилась в браузере и пропадёт после обновления. Обновить?')) return;
-    location.reload();
+    if (updating) return;
+    updating = true;
+    try {
+      // Дожидаемся записи страниц в память браузера, иначе они пропадут.
+      while (state.writes.size) await Promise.all([...state.writes]);
+      // Пока ждали, могли открыть редактор, окно PDF или начать обработку.
+      if (!$('editor').hidden || !$('sheet').hidden || !$('busy').hidden) return;
+      const lost = !state.persist ? state.pages.length : state.pages.filter(p => state.unsaved.has(p.id)).length;
+      if (lost && !confirm(`Страниц, не сохранённых в браузере: ${lost}. После обновления они пропадут. Обновить?`)) return;
+      location.reload();
+    } finally {
+      updating = false;
+    }
   };
-}
-
-// Плашка не показывается поверх редактора, окна PDF и обработки — там можно
-// потерять несохранённую работу. Появится, когда они закроются.
-function refreshUpdateBanner() {
-  $('update').hidden = !state.updateReady ||
-    !$('editor').hidden || !$('sheet').hidden || !$('busy').hidden;
 }
 
 // ---------- Запуск ----------
@@ -671,7 +661,7 @@ function setup() {
   $('pdf-make').onclick = makePdf;
   $('pdf-share').onclick = sharePdf;
   $('pdf-download').onclick = downloadPdf;
-  $('pdf-close').onclick = () => { $('sheet').hidden = true; state.pdf = null; refreshUpdateBanner(); };
+  $('pdf-close').onclick = () => { $('sheet').hidden = true; state.pdf = null; };
   $('sheet').addEventListener('click', e => { if (e.target === $('sheet')) $('pdf-close').click(); });
   ['pdf-size', 'pdf-fit', 'pdf-margin', 'pdf-quality', 'pdf-name'].forEach(id => {
     $(id).addEventListener('input', () => { if (state.pdf) resetSheetResult(); });

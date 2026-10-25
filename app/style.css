@@ -383,7 +383,7 @@ main {
 }
 /* Пока открыт редактор, окно или идёт обработка, плашки нет — чтобы
    «Обновить» не нажали посреди работы (она и так под окнами). */
-body:has(#editor:not([hidden]), #sheet:not([hidden]), #projects:not([hidden]), #about:not([hidden]), #busy:not([hidden])) #update { display: none; }
+body:has(#editor:not([hidden]), #sheet:not([hidden]), #projects:not([hidden]), #about:not([hidden]), #merge:not([hidden]), #compress:not([hidden]), #busy:not([hidden])) #update { display: none; }
 .version { margin: 4px 0 0; text-align: center; font-size: 12px; color: var(--muted); }
 
 /* ---------- Проекты ---------- */
@@ -524,3 +524,33 @@ body:has(#editor:not([hidden]), #sheet:not([hidden]), #projects:not([hidden]), #
 .page .row .icon { width: 20px; height: 20px; }
 .more-btn .icon { width: 22px; height: 22px; }
 .project-rename .icon, .project-delete .icon { width: 20px; height: 20px; }
+
+/* ---------- Объединение и сжатие PDF ---------- */
+.merge-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.merge-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  padding: 4px 4px 4px 12px;
+}
+.merge-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.merge-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.merge-meta { font-size: 13px; color: var(--muted); }
+.merge-item button {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.merge-item button:disabled { opacity: .3; }
+.merge-item .merge-del { color: var(--danger); }
+.merge-project { margin-top: 12px; }
+.file-line { margin: 8px 0 12px; font-size: 14px; overflow-wrap: anywhere; }

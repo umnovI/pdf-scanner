@@ -1,5 +1,6 @@
 import * as img from './imgproc.js';
 import { buildPdf } from './pdf.js';
+import { PdfDoc, PdfError, mergePdfs, compressPdf } from './pdftools.js';
 import * as db from './db.js';
 
 const $ = id => document.getElementById(id);
@@ -564,6 +565,27 @@ async function recompress(blob, { maxSide, q }) {
   return img.toBlob(c, q);
 }
 
+// PDF из страниц проекта с настройками экспорта (размер, поля, качество).
+async function pagesPdf(pages, { size, margin, fit, quality, title }, label = '') {
+  const jpegs = [];
+  for (let i = 0; i < pages.length; i++) {
+    busy(`${label}Готовлю страницу ${i + 1} из ${pages.length}…`);
+    await frame();
+    jpegs.push(await recompress(pages[i].out, QUALITY[quality] || QUALITY.high));
+  }
+  busy(`${label}Собираю PDF…`);
+  await frame();
+  return buildPdf(jpegs, { size, margin, fit, title });
+}
+
+// Настройки экспорта, сохранённые в окне «Сохранить PDF».
+const exportSettings = () => ({
+  size: settings.get('size', 'a4') === 'letter' ? 'letter' : 'a4',
+  margin: settings.get('margin', '0'),
+  fit: settings.get('fit', 'fill') === 'fit' ? 'fit' : 'fill',
+  quality: settings.get('quality', 'high'),
+});
+
 async function makePdf() {
   const size = $('pdf-size').value;
   const margin = $('pdf-margin').value;
@@ -575,15 +597,7 @@ async function makePdf() {
   settings.set('quality', quality);
   const name = safeName($('pdf-name').value);
   try {
-    const jpegs = [];
-    for (let i = 0; i < state.pages.length; i++) {
-      busy(`Готовлю страницу ${i + 1} из ${state.pages.length}…`);
-      await frame();
-      jpegs.push(await recompress(state.pages[i].out, QUALITY[quality] || QUALITY.high));
-    }
-    busy('Собираю PDF…');
-    await frame();
-    const blob = await buildPdf(jpegs, { size, margin, fit, title: name });
+    const blob = await pagesPdf(state.pages, { size, margin, fit, quality, title: name });
     state.pdf = { blob, name };
     $('pdf-result').textContent = `Готово: ${state.pages.length} стр., ${formatSize(blob.size)}`;
     $('pdf-result').hidden = false;
@@ -597,8 +611,8 @@ async function makePdf() {
   busy(null);
 }
 
-function pdfFile() {
-  return new File([state.pdf.blob], state.pdf.name + '.pdf', { type: 'application/pdf' });
+function pdfFile(pdf) {
+  return new File([pdf.blob], pdf.name + '.pdf', { type: 'application/pdf' });
 }
 
 function canShareFiles() {
@@ -609,25 +623,272 @@ function canShareFiles() {
   } catch { return false; }
 }
 
-async function sharePdf() {
-  if (!state.pdf) return;
+async function sharePdf(pdf = state.pdf) {
+  if (!pdf) return;
   try {
-    await navigator.share({ files: [pdfFile()], title: state.pdf.name });
+    await navigator.share({ files: [pdfFile(pdf)], title: pdf.name });
   } catch (e) {
     if (e.name !== 'AbortError') toast('Не получилось поделиться — используйте «Скачать»');
   }
 }
 
-function downloadPdf() {
-  if (!state.pdf) return;
-  const url = URL.createObjectURL(state.pdf.blob);
+function downloadPdf(pdf = state.pdf) {
+  if (!pdf) return;
+  const url = URL.createObjectURL(pdf.blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = state.pdf.name + '.pdf';
+  a.download = pdf.name + '.pdf';
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+// ---------- Объединение PDF ----------
+// Список: PDF-файлы с телефона и проекты сканера, в выбранном порядке.
+
+const merge = { items: [], result: null };
+
+// Понятная причина, почему файл не открылся.
+const pdfProblem = (e, fileName) => (e instanceof PdfError ? `«${fileName}»: ${e.message}` : `Не удалось открыть «${fileName}»`);
+const baseName = n => n.replace(/\.pdf$/i, '');
+
+function openMerge() {
+  merge.items = [];
+  merge.result = null;
+  $('merge-name').value = 'Объединённый ' + new Date().toLocaleDateString('ru-RU');
+  renderMerge();
+  $('merge').hidden = false;
+}
+
+function resetMergeResult() {
+  merge.result = null;
+  $('merge-result').hidden = true;
+  $('merge-share').hidden = true;
+  $('merge-download').hidden = true;
+  $('merge-make').hidden = false;
+}
+
+function renderMerge() {
+  const list = $('merge-list');
+  list.textContent = '';
+  merge.items.forEach((it, i) => {
+    const li = document.createElement('li');
+    li.className = 'merge-item';
+    li.innerHTML = `
+      <span class="merge-info"><span class="merge-title"></span><span class="merge-meta"></span></span>
+      <button class="merge-up" aria-label="Выше" ${i === 0 ? 'disabled' : ''}>${icon('chevron-up')}</button>
+      <button class="merge-down" aria-label="Ниже" ${i === merge.items.length - 1 ? 'disabled' : ''}>${icon('chevron-down')}</button>
+      <button class="merge-del" aria-label="Убрать">${icon('x')}</button>`;
+    li.querySelector('.merge-title').textContent = it.name;
+    li.querySelector('.merge-meta').textContent =
+      (it.kind === 'project' ? 'Проект · ' : 'PDF · ') + `${it.pages} стр.` + (it.size ? ` · ${formatSize(it.size)}` : '');
+    const swap = j => {
+      [merge.items[i], merge.items[j]] = [merge.items[j], merge.items[i]];
+      resetMergeResult();
+      renderMerge();
+    };
+    li.querySelector('.merge-up').onclick = () => swap(i - 1);
+    li.querySelector('.merge-down').onclick = () => swap(i + 1);
+    li.querySelector('.merge-del').onclick = () => { merge.items.splice(i, 1); resetMergeResult(); renderMerge(); };
+    list.appendChild(li);
+  });
+  $('merge-empty').hidden = merge.items.length >= 2;
+  $('merge-make').disabled = merge.items.length < 2;
+  // Проекты, которые ещё можно добавить (с хотя бы одной страницей).
+  const sel = $('merge-project');
+  sel.textContent = '';
+  const add = (value, text) => { const o = document.createElement('option'); o.value = value; o.textContent = text; sel.appendChild(o); };
+  add('', 'Выберите проект…');
+  for (const p of state.projects) {
+    const n = idsOf(p).length;
+    if (n && !merge.items.some(it => it.kind === 'project' && it.id === p.id)) add(p.id, `${p.name} (${n} стр.)`);
+  }
+  sel.disabled = sel.options.length < 2;
+}
+
+async function addMergeFiles(files) {
+  files = [...files];
+  if (!files.length) return;
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    busy(files.length > 1 ? `Открываю ${i + 1} из ${files.length}…` : 'Открываю PDF…');
+    await frame();
+    try {
+      const doc = await PdfDoc.load(new Uint8Array(await f.arrayBuffer()));
+      merge.items.push({ kind: 'file', name: baseName(f.name), doc, pages: doc.pageRefs.length, size: f.size });
+    } catch (e) {
+      console.warn(e);
+      toast(pdfProblem(e, f.name), 5000);
+    }
+  }
+  busy(null);
+  resetMergeResult();
+  renderMerge();
+}
+
+// Страницы проекта (открытого — из памяти, остальных — из базы).
+async function projectPages(p) {
+  if (p === state.project) return state.pages;
+  const mem = state.memory.get(p.id);
+  if (mem) return mem;
+  return (await db.loadPages(p.ids)).filter(x => x.out);
+}
+
+async function makeMerge() {
+  const title = safeName($('merge-name').value);
+  try {
+    const sources = [];
+    for (let i = 0; i < merge.items.length; i++) {
+      const it = merge.items[i];
+      if (it.kind === 'file') { sources.push(it.doc); continue; }
+      const p = state.projects.find(x => x.id === it.id);
+      if (!p) throw new PdfError(`Проект «${it.name}» удалён`);
+      const pages = await projectPages(p);
+      if (!pages.length) throw new PdfError(`В проекте «${it.name}» нет страниц`);
+      const blob = await pagesPdf(pages, exportSettings(), `«${p.name}»: `);
+      sources.push(await PdfDoc.load(new Uint8Array(await blob.arrayBuffer())));
+    }
+    busy('Объединяю…');
+    await frame();
+    const { blob, pages } = await mergePdfs(sources, {
+      title,
+      onProgress: (k, n) => { $('busy-text').textContent = `Объединяю: страница ${k} из ${n}…`; },
+    });
+    merge.result = { blob, name: title };
+    $('merge-result').textContent = `Готово: ${pages} стр., ${formatSize(blob.size)}`;
+    $('merge-result').hidden = false;
+    $('merge-make').hidden = true;
+    $('merge-download').hidden = false;
+    $('merge-share').hidden = !canShareFiles();
+  } catch (e) {
+    console.error(e);
+    toast(e instanceof PdfError ? e.message : 'Не удалось объединить PDF', 5000);
+  }
+  busy(null);
+}
+
+function setupMerge() {
+  $('merge-add-pdf').onclick = () => $('in-merge').click();
+  $('in-merge').onchange = e => { addMergeFiles(e.target.files); e.target.value = ''; };
+  $('merge-project').onchange = e => {
+    const p = state.projects.find(x => x.id === e.target.value);
+    if (p) {
+      merge.items.push({ kind: 'project', id: p.id, name: p.name, pages: idsOf(p).length });
+      resetMergeResult();
+    }
+    renderMerge();
+  };
+  $('merge-make').onclick = makeMerge;
+  $('merge-share').onclick = () => sharePdf(merge.result);
+  $('merge-download').onclick = () => downloadPdf(merge.result);
+  $('merge-name').addEventListener('input', () => { if (merge.result) resetMergeResult(); });
+  const close = () => { $('merge').hidden = true; merge.items = []; merge.result = null; };
+  $('merge-close').onclick = close;
+  $('merge').addEventListener('click', e => { if (e.target === $('merge')) close(); });
+}
+
+// ---------- Сжатие PDF до заданного размера ----------
+
+const squeeze = { file: null, result: null };
+
+function openCompress() {
+  squeeze.file = null;
+  squeeze.result = null;
+  $('compress-file').hidden = true;
+  const t = settings.get('compressTarget', '2');
+  $('compress-target').value = ['1', '2', '5', '10', 'custom'].includes(t) ? t : '2';
+  $('compress-custom').value = settings.get('compressCustom', '3');
+  $('compress-custom-field').hidden = $('compress-target').value !== 'custom';
+  resetCompressResult();
+  $('compress').hidden = false;
+}
+
+function resetCompressResult() {
+  squeeze.result = null;
+  $('compress-result').hidden = true;
+  $('compress-share').hidden = true;
+  $('compress-download').hidden = true;
+  $('compress-make').hidden = false;
+  $('compress-make').disabled = !squeeze.file;
+}
+
+// Целевой размер в байтах (null — неверное значение).
+function compressTarget() {
+  const v = $('compress-target').value;
+  const mb = v === 'custom' ? parseFloat(String($('compress-custom').value).replace(',', '.')) : +v;
+  return Number.isFinite(mb) && mb >= 0.05 ? Math.floor(mb * 1024 * 1024) : null;
+}
+
+async function makeCompress() {
+  const target = compressTarget();
+  if (!target) { toast('Укажите размер в мегабайтах'); return; }
+  settings.set('compressTarget', $('compress-target').value);
+  settings.set('compressCustom', $('compress-custom').value);
+  const f = squeeze.file;
+  const out = $('compress-result');
+  busy('Читаю PDF…');
+  await frame();
+  try {
+    if (f.size <= target) {
+      out.textContent = `Файл уже меньше ${formatSize(target)} (${formatSize(f.size)}) — сжимать не нужно.`;
+      out.hidden = false;
+      busy(null);
+      return;
+    }
+    const name = baseName(f.name) + ' (сжатый)';
+    const r = await compressPdf(new Uint8Array(await f.arrayBuffer()), target, {
+      onProgress: p => {
+        $('busy-text').textContent = p.stage === 'images'
+          ? `Сжимаю картинки: ${p.image} из ${p.images}…`
+          : 'Читаю PDF…';
+      },
+    });
+    const sizes = `${formatSize(r.original)} → ${formatSize(r.blob.size)}`;
+    if (r.fits) {
+      out.textContent = `Готово: ${sizes}` + (r.level < 0 ? ' (без потери качества)' : '');
+    } else if (r.blob.size < r.original) {
+      out.textContent = `Уложиться в ${formatSize(target)} не получилось: меньше ${formatSize(r.blob.size)} не сжать (${sizes}). ` +
+        'Обычно мешают шрифты и текст — их сжать нельзя.';
+    } else {
+      out.textContent = `Сжать не получилось: в файле нет картинок, которые можно уменьшить (${formatSize(r.original)}).`;
+    }
+    out.hidden = false;
+    if (r.blob.size < r.original) {
+      squeeze.result = { blob: r.blob, name };
+      $('compress-make').hidden = true;
+      $('compress-download').hidden = false;
+      $('compress-share').hidden = !canShareFiles();
+    }
+  } catch (e) {
+    console.error(e);
+    toast(e instanceof PdfError ? e.message : 'Не удалось сжать PDF', 5000);
+  }
+  busy(null);
+}
+
+function setupCompress() {
+  $('compress-pick').onclick = () => $('in-compress').click();
+  $('in-compress').onchange = e => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    squeeze.file = f;
+    $('compress-file').textContent = `${f.name} · ${formatSize(f.size)}`;
+    $('compress-file').hidden = false;
+    resetCompressResult();
+  };
+  $('compress-target').onchange = () => {
+    $('compress-custom-field').hidden = $('compress-target').value !== 'custom';
+    resetCompressResult();
+  };
+  $('compress-custom').addEventListener('input', resetCompressResult);
+  $('compress-make').onclick = makeCompress;
+  $('compress-share').onclick = () => sharePdf(squeeze.result);
+  $('compress-download').onclick = () => downloadPdf(squeeze.result);
+  const close = () => { $('compress').hidden = true; squeeze.file = null; squeeze.result = null; };
+  $('compress-close').onclick = close;
+  $('compress').addEventListener('click', e => { if (e.target === $('compress')) close(); });
 }
 
 // ---------- Проекты ----------
@@ -930,6 +1191,8 @@ function setupMenu() {
     else if (act === 'new') newProject();
     else if (act === 'update') { openAbout(); checkForUpdate(); }
     else if (act === 'about') openAbout();
+    else if (act === 'merge') openMerge();
+    else if (act === 'compress') openCompress();
     // 'clear' — свой обработчик у #btn-clear
   });
   $('about-check').onclick = checkForUpdate;
@@ -947,7 +1210,7 @@ async function reloadForUpdate() {
     // Дожидаемся записи страниц в память браузера, иначе они пропадут.
     while (state.writes.size) await Promise.all([...state.writes]);
     // Пока ждали, могли открыть редактор, окно PDF или начать обработку.
-    if (!$('editor').hidden || !$('sheet').hidden || !$('busy').hidden) {
+    if (['editor', 'sheet', 'merge', 'compress', 'busy'].some(id => !$(id).hidden)) {
       toast('Обновление отложено — закройте окно и нажмите «Обновить» ещё раз');
       return;
     }
@@ -1013,10 +1276,12 @@ function setup() {
   };
   setupProjects();
   setupMenu();
+  setupMerge();
+  setupCompress();
 
   $('pdf-make').onclick = makePdf;
-  $('pdf-share').onclick = sharePdf;
-  $('pdf-download').onclick = downloadPdf;
+  $('pdf-share').onclick = () => sharePdf();
+  $('pdf-download').onclick = () => downloadPdf();
   $('pdf-close').onclick = () => { $('sheet').hidden = true; state.pdf = null; };
   $('sheet').addEventListener('click', e => { if (e.target === $('sheet')) $('pdf-close').click(); });
   ['pdf-size', 'pdf-fit', 'pdf-margin', 'pdf-quality', 'pdf-name'].forEach(id => {

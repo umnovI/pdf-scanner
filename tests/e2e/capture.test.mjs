@@ -21,7 +21,7 @@ describe('камера и редактор', () => {
     assert.equal(await activeFilter(page), 'enhance', 'по умолчанию «Улучшить»');
     await editorDone(page);
     assert.equal(await pageCount(page), 1);
-    assert.equal(await page.locator('#btn-pdf').textContent().then(t => t.trim()), '📄 PDF (1)');
+    assert.equal(await page.locator('#btn-pdf').textContent().then(t => t.trim()), 'PDF (1)'); // иконка — SVG, без текста
 
     // рамка действительно найдена, а не «весь кадр»
     const [rec] = await dbRecords(page);

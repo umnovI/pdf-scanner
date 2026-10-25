@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
 import {
-  reload, addFromCamera, addFromGallery, addSigs, dbRecords, editorDone, launch, makePdf, makePng, openApp, openEditor, pageCount,
+  reload, addFromCamera, addFromGallery, addSigs, clearEnabled, clickClear, dbRecords, editorDone, launch, makePdf, makePng, openApp, openEditor, pageCount,
   pageSigs, parsePdf, startServer, waitPages,
 } from '../helpers.mjs';
 
@@ -25,7 +25,7 @@ describe('порядок страниц', () => {
     const { page } = await openApp(browser, server);
     assert.equal(await page.locator('#empty').isVisible(), true);
     assert.equal(await page.locator('#btn-pdf').isDisabled(), true);
-    assert.equal(await page.locator('#btn-clear').isHidden(), true);
+    assert.equal(await clearEnabled(page), false, '«Очистить проект» в меню отключена');
   });
 
   test('◀ ▶ переставляют страницы, крайние кнопки отключены, порядок переживает перезагрузку', async () => {
@@ -95,7 +95,7 @@ describe('удаление и очистка', () => {
     await remove(page, 1);
     await page.waitForSelector('#empty:not([hidden])');
     assert.equal(await page.locator('#btn-pdf').isDisabled(), true);
-    assert.equal(await page.locator('#btn-clear').isHidden(), true);
+    assert.equal(await clearEnabled(page), false, '«Очистить проект» в меню отключена');
     await reloadAndWait(page, 0);
     assert.equal(await pageCount(page), 0);
   });
@@ -104,11 +104,11 @@ describe('удаление и очистка', () => {
     const { page, errors } = await openApp(browser, server);
     await addSigs(page, [0, 1, 2]);
     page.once('dialog', d => { assert.match(d.message(), /Удалить все страницы/); d.dismiss(); });
-    await page.click('#btn-clear');
+    await clickClear(page);
     assert.equal(await pageCount(page), 3);
 
     page.once('dialog', d => d.accept());
-    await page.click('#btn-clear');
+    await clickClear(page);
     await page.waitForSelector('#empty:not([hidden])');
     assert.equal(await pageCount(page), 0);
     await reloadAndWait(page, 0);
@@ -178,11 +178,11 @@ describe('сохранение при правке', () => {
 describe('PDF', () => {
   const MIXED = ['white.jpg', 'landscape.jpg', 'school.jpg'];
 
-  test('имя файла по умолчанию: «Scan ГГГГ-ММ-ДД ЧЧ-ММ.pdf»', async () => {
+  test('имя файла по умолчанию: «<название проекта> ГГГГ-ММ-ДД ЧЧ-ММ.pdf»', async () => {
     const { page } = await openApp(browser, server);
     await addFromGallery(page, ['white.jpg']);
     const { filename } = await makePdf(page);
-    assert.match(filename, /^Scan \d{4}-\d{2}-\d{2} \d{2}-\d{2}\.pdf$/);
+    assert.match(filename, /^Проект 1 \d{4}-\d{2}-\d{2} \d{2}-\d{2}\.pdf$/);
   });
 
   test('своё имя (кириллица), недопустимые символы заменяются, «.pdf» не дублируется', async () => {
@@ -194,7 +194,7 @@ describe('PDF', () => {
       HTMLAnchorElement.prototype.click = function () { window.downloads.push(this.download); return click.call(this); };
     });
     await addFromGallery(page, ['white.jpg']);
-    const names = [['Договор №5 «Ёлка»', 'Договор №5 «Ёлка».pdf'], ['a/b:c*?d', 'a_b_c_d.pdf'], ['report.PDF', 'report.pdf'], ['   ', /^Scan \d{4}-\d{2}-\d{2} \d{2}-\d{2}\.pdf$/]];
+    const names = [['Договор №5 «Ёлка»', 'Договор №5 «Ёлка».pdf'], ['a/b:c*?d', 'a_b_c_d.pdf'], ['report.PDF', 'report.pdf'], ['   ', /^Проект 1 \d{4}-\d{2}-\d{2} \d{2}-\d{2}\.pdf$/]];
     for (const [typed, expected] of names) {
       await page.click('#btn-pdf');
       await page.fill('#pdf-name', typed);

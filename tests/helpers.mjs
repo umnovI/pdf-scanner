@@ -35,9 +35,10 @@ export function appFromCommit(commit) {
  * (Cache-Control: max-age=600). build — номер версии, который подставляется
  * так же, как в workflow публикации. publish(v) «выкладывает» новую версию.
  * appDir — взять код приложения из другой папки; commit (или переменная окружения
- * APP_COMMIT) — из коммита: так тест запускают на старом коде.
+ * APP_COMMIT) — из коммита: так тест запускают на старом коде. Переменная APP_DIR — папка с
+ * изменённой копией app/ (проверка, что тест замечает поломку: мутационный прогон).
  */
-export async function startServer({ build, appDir, commit = process.env.APP_COMMIT } = {}) {
+export async function startServer({ build, appDir = process.env.APP_DIR, commit = process.env.APP_COMMIT } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pdf-scanner-'));
   let old = null;
   try {

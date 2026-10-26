@@ -13,6 +13,8 @@ const FILES = [
   'app.js',
   'imgproc.js',
   'pdf.js',
+  'pdfread.js',
+  'pdftools.js',
   'db.js',
   'manifest.webmanifest',
   'icons/icon-192.png',

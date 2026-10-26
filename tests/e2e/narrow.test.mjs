@@ -1,7 +1,8 @@
 // Узкий экран (320 px): нет горизонтальной прокрутки, подписи кнопок не обрезаны.
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { addFromCamera, addFromGallery, addSigs, editorDone, isClickable, launch, openApp, openEditor, startServer } from '../helpers.mjs';
+import { addFromCamera, addFromGallery, addSigs, editorDone, isClickable, launch, menuAct, openApp, openEditor, startServer } from '../helpers.mjs';
+import { fx, imagePdf, pdfInput } from '../pdfutil.mjs';
 
 let server, browser;
 before(async () => { server = await startServer(); browser = await launch(); });
@@ -89,5 +90,76 @@ describe('экран 320 px', () => {
     await page.click('#pdf-make');
     await page.waitForSelector('#pdf-download:not([hidden])');
     assertFits(await overflow(page, '#sheet'), 'окно PDF после создания');
+  });
+
+  test('окно «Объединить PDF»: пустое, со списком, с проектом и после объединения', async () => {
+    const { page, errors } = await openApp(browser, server, { device: DEVICE });
+    await addFromGallery(page, ['white.jpg']);
+    await menuAct(page, 'merge');
+    assertFits(await overflow(page, '#merge'), 'объединение: пусто');
+    await page.setInputFiles('#in-merge', [pdfInput('a1', fx('text')), pdfInput('b2', fx('objstm')), pdfInput('c3', fx('hybrid'))]);
+    await page.waitForSelector('#merge-list .merge-item:nth-child(3)');
+    await page.waitForSelector('#busy[hidden]', { state: 'attached' });
+    await page.selectOption('#merge-project', { index: 1 });
+    assertFits(await overflow(page, '#merge'), 'объединение: список из 4 элементов');
+    for (const sel of ['#merge-add-pdf', '#merge-make', '#merge-close', '#merge-project', '#merge-name', '.merge-up:not(:disabled)', '.merge-down:not(:disabled)', '.merge-del']) {
+      await page.locator(sel).first().scrollIntoViewIfNeeded(); // окно прокручивается: кнопки внизу не видны сразу
+      assert.ok(await isClickable(page, sel), `${sel} перекрыта`);
+    }
+    await page.click('#merge-make');
+    await page.waitForSelector('#merge-download:not([hidden])');
+    assertFits(await overflow(page, '#merge'), 'объединение: результат');
+    for (const sel of ['#merge-download', '#merge-close']) {
+      await page.locator(sel).scrollIntoViewIfNeeded();
+      assert.ok(await isClickable(page, sel), `${sel} перекрыта`);
+    }
+    assert.deepEqual(errors, []);
+  });
+
+  test('окно «Объединить PDF»: очень длинные имена обрезаются многоточием, кнопки ↑ ↓ ✕ остаются на экране', async () => {
+    const { page, errors } = await openApp(browser, server, { device: DEVICE });
+    await menuAct(page, 'merge');
+    const long = 'Очень_длинное_название_файла_с_кириллицей_и_цифрами_1234567890_ещё_длиннее_чем_экран';
+    await page.setInputFiles('#in-merge', [pdfInput(long, fx('text')), pdfInput(long + '2', fx('objstm'))]);
+    await page.waitForSelector('#merge-list .merge-item:nth-child(2)');
+    await page.waitForSelector('#busy[hidden]', { state: 'attached' });
+    const r = await page.evaluate(() => {
+      const vw = document.documentElement.clientWidth;
+      const out = { scroll: document.documentElement.scrollWidth - vw, outside: [] };
+      for (const el of document.querySelectorAll('#merge .merge-item, #merge .merge-item button, #merge .merge-info')) {
+        const b = el.getBoundingClientRect();
+        if (b.left < -0.5 || b.right > vw + 0.5) out.outside.push(`${el.className} ${Math.round(b.left)}..${Math.round(b.right)}`);
+      }
+      const t = document.querySelector('.merge-title');
+      out.ellipsis = t.scrollWidth > t.clientWidth && getComputedStyle(t).textOverflow === 'ellipsis';
+      return out;
+    });
+    assert.ok(r.scroll <= 0, `горизонтальная прокрутка ${r.scroll} px`);
+    assert.deepEqual(r.outside, []);
+    assert.ok(r.ellipsis, 'длинное имя должно обрезаться многоточием');
+    assert.deepEqual(errors, []);
+  });
+
+  test('окно «Сжать PDF»: пустое, с выбранным файлом, со своим размером и с результатом', async () => {
+    const { page, errors } = await openApp(browser, server, { device: DEVICE });
+    await menuAct(page, 'compress');
+    assertFits(await overflow(page, '#compress'), 'сжатие: пусто');
+    const longName = 'Очень_длинное_название_сканированного_договора_с_приложениями_и_актами_2024.pdf';
+    await page.setInputFiles('#in-compress', pdfInput(longName, fx('images')));
+    await page.selectOption('#compress-target', 'custom');
+    await page.fill('#compress-custom', '0.1');
+    assertFits(await overflow(page, '#compress'), 'сжатие: файл и свой размер');
+    for (const sel of ['#compress-pick', '#compress-target', '#compress-custom', '#compress-make', '#compress-close']) {
+      await page.locator(sel).scrollIntoViewIfNeeded();
+      assert.ok(await isClickable(page, sel), `${sel} перекрыта`);
+    }
+    await page.click('#compress-make');
+    await page.waitForSelector('#compress-result:not([hidden])');
+    await page.waitForSelector('#busy[hidden]', { state: 'attached', timeout: 30000 });
+    await page.waitForSelector('#compress-download:not([hidden])');
+    assertFits(await overflow(page, '#compress'), 'сжатие: результат');
+    await page.locator('#compress-download').scrollIntoViewIfNeeded();
+    assert.ok(await isClickable(page, '#compress-download'));
+    assert.deepEqual(errors, []);
   });
 });
